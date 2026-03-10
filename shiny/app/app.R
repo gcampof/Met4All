@@ -1,8 +1,6 @@
-library(shiny)
-library(bslib)
-library(shinyjs)
-source("modules/load_data.R")
-source("modules/global_methylation.R")
+source("all_imports.R")
+source("modules/load_data/load_data.R")
+source("modules/primary_analysis.R")
 
 options(shiny.reactlog = TRUE)
 options(shiny.maxRequestSize = 5 * 1024^3)
@@ -19,33 +17,15 @@ ui <- navbarPage(
   
   tabPanel("Load Data", load_data_ui("load_data")),
   
-  tabPanel("Global Methylation", 
-           value = "global",
-           global_methylation_ui("global_meth")
-  ),
-  
-  tabPanel("Differential Methylation", 
-           value = "diffmeth",
-           h3("DIFF placeholder")
+  tabPanel("Primary analysis",
+           value = "primary",
+           primary_analysis_ui("primary_analysis")
   )
 )
 
 server <- function(input, output, session) {
-  
-  ready <- reactiveVal(FALSE)
-  
-  load_data_server("load_data", notify_ready = ready)
-  global_methylation_server("global_meth")
-  
-  # observe({
-  #   if (ready()) {
-  #     shinyjs::enable(selector = "a[data-value='global']")
-  #     shinyjs::enable(selector = "a[data-value='diffmeth']")
-  #   } else {
-  #     shinyjs::disable(selector = "a[data-value='global']")
-  #     shinyjs::disable(selector = "a[data-value='diffmeth']")
-  #   }
-  # })
+  load_data_return <- load_data_server("load_data")
+  primary_analysis_server("primary_analysis", load_data_return = load_data_return)
 }
 
 shinyApp(ui, server)

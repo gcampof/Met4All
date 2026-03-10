@@ -32,7 +32,7 @@ RUN R -e 'pak::pkg_install(c("shinyWidgets", "shinyjs", "future", "DT", "dplyr",
 RUN R -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org")'
 
 # Install Bioconductor packages via pak
-RUN R -e 'pak::pkg_install(c("BiocManager", "minfi", "IlluminaHumanMethylationEPICv2manifest", "IlluminaHumanMethylationEPICv2anno.20a1.hg38", "limma", "ChAMP","clusterProfiler", "sesame", "sesameData","AnnotationDbi","org.Hs.eg.db","GO.db","methylclock"))'
+RUN R -e 'pak::pkg_install(c("BiocManager", "minfi", "patchwork", "ggpubr", "bluster", "ComplexHeatmap", "ConsensusClusterPlus","IlluminaHumanMethylationEPICv2manifest", "IlluminaHumanMethylationEPICv2anno.20a1.hg38", "limma", "ChAMP","clusterProfiler", "sesame", "sesameData","AnnotationDbi","org.Hs.eg.db","GO.db","methylclock"))'
 
 # Create and set working directory for Shiny app
 WORKDIR /srv/shiny-server
@@ -49,3 +49,5 @@ USER shiny
 
 EXPOSE 3838
 CMD ["/usr/bin/shiny-server"]
+
+
