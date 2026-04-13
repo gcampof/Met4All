@@ -1,0 +1,32 @@
+# config.yml
+default:
+  # Static directories (exist before any analysis)
+  cache:                    "cache"
+  data:                     "data"
+  filter:                   "common_files/filter"
+  custom_color_palette:     "common_files/custom_color_palette"
+  pathways:                 "common_files/pathways"
+
+  # Analysis subdirectories (created per session, relative to analysis_dir)
+  subdirs:
+    logs:           "logs"
+    input:          "input"
+    results:        "results"
+    preprocessing:  "results/1-preprocessing"
+    qc:             "results/2-qc"
+    beta:           "results/3-beta"
+    mds:            "results/4-mds"
+    pca:            "results/5-pca"
+    umap:           "results/6-umap"
+    heatmap:        "results/7-heatmap"
+    global_met:     "results/8-global_methylation"
+    differential:   "results/9-differential_methylation"
+    cnv:            "results/10-cnv"
+
+  # Annotation
+  annotation_pkg: "IlluminaHumanMethylationEPICanno.ilm10b4.hg19"
+  
+  # Geneset Pathways
+  gene_set:
+    kegg: "c2.cp.kegg.v7.0.symbols.gmt"
+    hallmark: "h.all.v7.0.symbols.gmt"
