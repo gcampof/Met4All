@@ -1,5 +1,0 @@
-:root.__rstudio_bslib_get_variables {
-  --bslib-preset-type: builtin;
-  --bslib-preset-name: shiny;
-  --bootstrap-version: 5;
-}
