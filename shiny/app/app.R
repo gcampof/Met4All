@@ -166,7 +166,7 @@ server <- function(input, output, session) {
   # Render UI conditionally
   output$primary_analysis_ui_container <- renderUI({
     if (data_ready()) {
-      primary_analysis_ui("primary_analysis")
+      primary_analysis_ui("primary_analysis", load_data_return$type_selected())
     } else {
       div(
         class = "text-center p-5",
@@ -182,7 +182,6 @@ server <- function(input, output, session) {
     req(data_ready())
     # Only initialize once
     if (!module_initialized()) {
-      
       if (!heavy_components_loaded()) {
         APP_CACHE <<- load_heavy_components(session, DIRS, cfg)
         heavy_components_loaded(TRUE)

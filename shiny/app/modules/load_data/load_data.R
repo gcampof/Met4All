@@ -490,6 +490,18 @@ load_data_server <- function(id, DIRS, cfg) {
       }, error = function(e) {
         message("Error during data loading: ", e$message)
         
+        # Clean all files inside input
+        if (!is.null(DIRS$input) && dir.exists(DIRS$input)) {
+          tryCatch({
+            unlink(file.path(DIRS$input, "*"), recursive = TRUE, force = TRUE)
+            message("DIRS$input cleaned successfully")
+          }, warning = function(w) {
+            message("Warning while cleaning DIRS$input: ", w$message)
+          }, error = function(e2) {
+            message("Failed to clean DIRS$input: ", e2$message)
+          })
+        }
+        
         # Reset UI to main view
         shinyjs::hide("ld_loading_view")
         shinyjs::hide("ld_idats_view")
@@ -843,7 +855,8 @@ load_data_server <- function(id, DIRS, cfg) {
       array_names_ld = array_names,
       mSetSq_list_ld = mSetSq_list,
       beta_merged_ld= beta_merged,
-      targets_merged_ld = targets_merged
+      targets_merged_ld = targets_merged,
+      type_selected = type_selected
     ))
   })
 }

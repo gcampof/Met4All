@@ -18,6 +18,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     mSetSq_list <<- load_data_return$mSetSq_list_ld
     beta_merged <<- load_data_return$beta_merged_ld
     targets_merged <<- load_data_return$targets_merged_ld
+    type_selected <<- load_data_return$type_selected()
     umap_data <<- reactiveVal(NULL)
     current_view <<- reactiveVal(NULL)
     PALETTES <<- reactive({
@@ -35,36 +36,21 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # Disable/enable buttons based on data type (beta or idats)
     observe({
       req(length(names(input)) > 0)
-      req(array_names())
+      req(beta_merged() | !is.null(targets_merged()))
       
       if (!view_initialized()) {
-        has_array_data <- !is.null(array_names()) && length(array_names()) > 0
-        
-        session$onFlushed(function() {
-          if (has_array_data) {
-            shinyjs::enable("nav_beta_matrix")
-            shinyjs::enable("nav_qc")
-            shinyjs::enable("nav_cnv")
-            shinyjs::removeClass("nav_beta_matrix_wrapper", "btn-disabled-tooltip")
-            shinyjs::removeClass("nav_qc_wrapper", "btn-disabled-tooltip")
-            shinyjs::removeClass("nav_cnv_wrapper", "btn-disabled-tooltip")
-            update_active_button("nav_beta_matrix")
-          } else {
-            shinyjs::disable("nav_beta_matrix")
-            shinyjs::disable("nav_qc")
-            shinyjs::disable("nav_cnv")
-            shinyjs::addClass("nav_beta_matrix_wrapper", "btn-disabled-tooltip")
-            shinyjs::addClass("nav_qc_wrapper", "btn-disabled-tooltip")
-            shinyjs::addClass("nav_cnv_wrapper", "btn-disabled-tooltip")
-            update_active_button("nav_mds")
-          }
-        }, once = TRUE)
-        
-        show_view("view_beta_matrix", "Beta Matrix")
-        current_view("beta_matrix")
+        if (type_selected == "IDATS") {
+          update_active_button("nav_beta_matrix")
+          show_view("view_beta_matrix", "Beta Matrix")
+          current_view("beta_matrix")
+        } else {
+          update_active_button("nav_mds")
+          show_view("view_mds", "Multidimensional Scaling (MDS)")
+          current_view("mds")
+        }
         view_initialized(TRUE)
       }
-    })    
+    })
     
     # Update palettes
     observe({
@@ -119,25 +105,16 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- NAVIGATION LOGIC ---
     observeEvent(input$nav_beta_matrix, {
-      has_array_data <- !is.null(array_names()) && length(array_names()) > 0
-      if (has_array_data) {
         current_view("beta_matrix")
         update_active_button("nav_beta_matrix")
         show_view("view_beta_matrix", "Beta Matrix")
-      } else {
-        showNotification("Beta matrix boxplots are only available when loading from IDATs", type = "warning")
-      }
     })
     
     observeEvent(input$nav_qc, {
       has_array_data <- !is.null(array_names()) && length(array_names()) > 0
-      if (has_array_data) {
         current_view("qc")
         update_active_button("nav_qc")
         show_view("view_qc", "QC Report")
-      } else {
-        showNotification("QC Report is only available when loading from IDATs", type = "warning")
-      }
     })
     
     observeEvent(input$nav_mds, {
@@ -176,16 +153,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       show_view("view_differential", "Differential Methylation")
     })
     
-    
     observeEvent(input$nav_cnv, {
-      has_array_data <- !is.null(array_names()) && length(array_names()) > 0
-      if (has_array_data) {
         current_view("cnv")
         update_active_button("nav_cnv")
         show_view("view_cnv", "CNV")
-      } else {
-        showNotification("CNV analysis is only available when loading from IDATs", type = "warning")
-      }
     }) 
     
     # --- DOWNLOAD BUTTONS BETA/TARGETS ---
@@ -254,7 +225,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }
     })
     
-
+    
     # --- QC PDF VIEWER UI ---
     output$qc_pdf_tabs <- renderUI({
       tabs <- lapply(array_names(), function(arr) {

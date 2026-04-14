@@ -7,8 +7,9 @@ source("modules/primary_analysis/differential/differential_met_ui.R")
 source("modules/primary_analysis/cnv/cnv_ui.R")
 
 # UI
-primary_analysis_ui <- function(id) {
+primary_analysis_ui <- function(id, type_selected) {
   ns <- NS(id)
+  is_idats <- type_selected == "IDATS"
   
   tagList(
     shinyjs::useShinyjs(),
@@ -95,26 +96,26 @@ primary_analysis_ui <- function(id) {
           class = "d-flex flex-column gap-2",
           div(
             id = ns("nav_beta_matrix_wrapper"),
-            class = "btn-disabled-tooltip",
-            `data-tooltip` = "Only available when loading from IDATs",
+            class = if (!is_idats) "nav-btn-wrapper btn-disabled-tooltip" else "nav-btn-wrapper",
+            `data-tooltip` = if (!is_idats) "Only available when loading from IDATs" else NULL,
             actionButton(
               ns("nav_beta_matrix"),
               "Beta Matrix",
-              class = "btn btn-primary w-100 text-start",
+              class = "btn btn-outline-primary w-100 text-start",
               style = "justify-content: flex-start;",
-              disabled = TRUE
+              disabled = if (!is_idats) TRUE else NULL
             )
           ),
           div(
             id = ns("nav_qc_wrapper"),
-            class = "btn-disabled-tooltip",
-            `data-tooltip` = "Only available when loading from IDATs",
+            class = if (!is_idats) "nav-btn-wrapper btn-disabled-tooltip" else "nav-btn-wrapper",
+            `data-tooltip` = if (!is_idats) "Only available when loading from IDATs" else NULL,
             actionButton(
               ns("nav_qc"),
               "QC Report",
               class = "btn btn-outline-primary w-100 text-start",
               style = "justify-content: flex-start;",
-              disabled = TRUE
+              disabled = if (!is_idats) TRUE else NULL
             )
           ),
           actionButton(
@@ -153,19 +154,25 @@ primary_analysis_ui <- function(id) {
             class = "btn btn-outline-primary w-100 text-start",
             style = "justify-content: flex-start;"
           ),
-          # CNV - disabled without IDAT data
+          actionButton(
+            ns("nav_differential"),
+            "Differential Methylation",
+            class = "btn btn-outline-primary w-100 text-start",
+            style = "justify-content: flex-start;"
+          ),
           div(
             id = ns("nav_cnv_wrapper"),
-            class = "btn-disabled-tooltip",
-            `data-tooltip` = "Only available when loading from IDATs",
+            class = if (!is_idats) "nav-btn-wrapper btn-disabled-tooltip" else "nav-btn-wrapper",
+            `data-tooltip` = if (!is_idats) "Only available when loading from IDATs" else NULL,
             actionButton(
               ns("nav_cnv"),
-              "CNV",
+              "CNV Analysis",
               class = "btn btn-outline-primary w-100 text-start",
               style = "justify-content: flex-start;",
-              disabled = TRUE
+              disabled = if (!is_idats) TRUE else NULL
             )
           ),
+
           # Custom palette button input
           hr(style = "margin: 8px 0;"),
           fileInput(
