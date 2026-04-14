@@ -48,6 +48,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           show_view("view_mds", "Multidimensional Scaling (MDS)")
           current_view("mds")
         }
+        
         view_initialized(TRUE)
       }
     })

@@ -433,53 +433,57 @@ load_data_server <- function(id, DIRS, cfg) {
       shinyjs::show("ld_loading_view")
       
       tryCatch({
-        withProgress(message = "Loading data", {
+        notification_id <- showNotification("Extracting files from zip...", type="message", duration=0)
+        zip_paths <- input$zipfile$datapath
+        archive::archive_extract(zip_paths, dir = DIRS$input)
+        
+        if (type_selected() == "IDATS") {
+          removeNotification(notification_id)
+          notification_id <- showNotification("Organizing IDAT files...", type="message", duration=0)
+
+          # Create idats folder and copy all IDATs there
+          idats_dir <- parse_idat_files(DIRS$input, DIRS$preprocessing)
           
-          incProgress(0.1, detail = "Extracting files from zip...")
-          zip_paths <- input$zipfile$datapath
-          archive::archive_extract(zip_paths, dir = DIRS$input)
+          removeNotification(notification_id)
+          notification_id <- showNotification("Classifying by array type...", type="message", duration=0)
+
+          # Now organize by array type
+          order_idat_per_array(idats_dir, DIRS$preprocessing)
           
-          if (type_selected() == "IDATS") {
-            incProgress(0.3, detail = "Organizing IDAT files...")
-            
-            # Create idats folder and copy all IDATs there
-            idats_dir <- parse_idat_files(DIRS$input, DIRS$preprocessing)
-            
-            incProgress(0.5, detail = "Classifying by array type...")
-            
-            # Now organize by array type
-            order_idat_per_array(idats_dir, DIRS$preprocessing)
-            
-            incProgress(0.8, detail = "Generating sample summary...")
-            temp_df <- generate_idat_dataframe(DIRS$preprocessing)
-            
-            if (nrow(temp_df) == 0) {
-              stop("No valid IDAT samples detected after classification")
-            }
-            
-            samples_df(temp_df)
-            
-            incProgress(1.0, detail = "Complete!")
-            
-          } else if (type_selected() == "BETA") {
-            incProgress(0.5, detail = "Extracting BETA files...")
-            beta_and_targets <- extract_beta_and_targets(DIRS$input, DIRS$beta)
-            beta_merged(beta_and_targets$beta)
-            targets_merged(beta_and_targets$targets)
-            incProgress(1.0, detail = "Complete!")
-            
-            shinyjs::hide("ld_loading_view")
-            updateNavbarPage(session, "main_navbar", selected = "primary")
-            
-            # Return only using beta and targets
-            return(list(
-              array_names_ld = array_names,
-              mSetSq_list_ld = mSetSq_list,
-              beta_merged_ld= beta_merged,
-              targets_merged_ld = targets_merged
-            ))
+          removeNotification(notification_id)
+          notification_id <- showNotification("Generating sample summary...", type="message", duration=0)
+
+          temp_df <- generate_idat_dataframe(DIRS$preprocessing)
+          
+          if (nrow(temp_df) == 0) {
+            stop("No valid IDAT samples detected after classification")
           }
-        })
+          
+          samples_df(temp_df)
+          
+          removeNotification(notification_id)
+          notification_id <- showNotification("Complete!", type="message", duration=3)
+          
+        } else if (type_selected() == "BETA") {
+          removeNotification(notification_id)
+          notification_id <- showNotification("Extracting BETA files...", type="message", duration=0)
+          beta_and_targets <- extract_beta_and_targets(DIRS$input, DIRS$beta, notification_id)
+          beta_merged(beta_and_targets$beta)
+          targets_merged(beta_and_targets$targets)
+          
+          notification_id <- showNotification("Complete!", type="message", duration=3)
+          
+          shinyjs::hide("ld_loading_view")
+          updateNavbarPage(session, "main_navbar", selected = "primary")
+          
+          # Return only using beta and targets
+          return(list(
+            array_names_ld = array_names,
+            mSetSq_list_ld = mSetSq_list,
+            beta_merged_ld= beta_merged,
+            targets_merged_ld = targets_merged
+          ))
+        }
         
         # Only hide loading and show next view on success
         if (type_selected() == "IDATS") {
@@ -552,23 +556,25 @@ load_data_server <- function(id, DIRS, cfg) {
     observeEvent(input$run_qc, {
       shinyjs::hide("ld_idats_view")
       shinyjs::show("ld_loading_view")
-      withProgress(message = "Running Quality Control", {
-        incProgress(0.3, detail = "Separating unused IDATs...")
-        
         tryCatch({
+          notification_id <- showNotification("Separating unused IDATs...", type="message", duration=0)
           selected_idats <- input$idat_table_rows_selected
           separate_unselected_idats(samples_df(), selected_idats, DIRS$preprocessing)
+          
+          removeNotification(notification_id)
+          notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=0)
           parse_samplesheets(DIRS$input, DIRS$preprocessing)
+          
           # Mid processing clean up
           unlink(DIRS$input)
           
-          incProgress(0.5, detail = "Generating Quality Control metrics for all arrays...")
-          
+          # Run QC loading
           qc_res_temp <- load_qc_data_for_arrays_batch(DIRS$preprocessing, DIRS$qc)
+          
           qc_results(qc_res_temp$qc_results)
           array_names(qc_res_temp$arrays_used)
           
-          incProgress(1.0, detail = "Complete!")
+          notification_id <- showNotification("Complete!", type="message", duration=3)
           shinyjs::hide("ld_loading_view")
           shinyjs::show("ld_qc_view")
         }, error = function(e) {
@@ -577,7 +583,6 @@ load_data_server <- function(id, DIRS, cfg) {
             text = paste("Running QC failed:", e$message)
           ))
         })
-      })
     })
     
     
@@ -648,6 +653,7 @@ load_data_server <- function(id, DIRS, cfg) {
         # Check if this array's data is already loaded
         if (is.null(loaded_qc_data[[current_array]])) {
           message("Loading ", current_array, " data from disk...")
+          notification_id <- showNotification(paste0("Loading ", current_array, " data from disk..."), type = "message", duration = 0)
           
           # Load from disk
           rgset_path <- qc_results()$rgsets[[current_array]]
@@ -679,6 +685,8 @@ load_data_server <- function(id, DIRS, cfg) {
           rm(full_rgSet, full_detP, mean_detP)
           gc()
           
+          removeNotification(notification_id)
+          showNotification("Data loaded", type = "message", duration = 2)
           message("Loaded and subsetted ", current_array, " - RGSet size: ", 
                   format(object.size(loaded_qc_data[[current_array]]$rgSet), units = "auto"),
                   " (kept ", top_n, " of ", loaded_qc_data[[current_array]]$total_samples, " samples)")
@@ -772,6 +780,8 @@ load_data_server <- function(id, DIRS, cfg) {
           rgset_path <- qc_results()$rgsets[[array]]
           detp_path <- qc_results()$detections[[array]]
           
+          notification_id <- showNotification("Loading RGset and DetP...", type = "message", duration = 0)
+        
           message("Loading from disk: ", basename(rgset_path))
           rgSet <- readRDS(rgset_path)
           detP <- readRDS(detp_path)
@@ -787,6 +797,7 @@ load_data_server <- function(id, DIRS, cfg) {
                     thr, array)
           )
           write.csv(failed_perc, file = csv_file, quote = FALSE, row.names = TRUE)
+ 
           
           # Generate and save QC plot
           p <- generate_detection_p_barplot(
@@ -805,6 +816,9 @@ load_data_server <- function(id, DIRS, cfg) {
           
           # Generate Beta matrix
           message("Generating beta matrix for ", array, "...")
+          removeNotification(notification_id)
+          notification_id <- showNotification(paste0("Generating beta matrix for ",
+                                                     array, "..."), type = "message", duration = 2)
           result_paths <- generate_beta_matrix(
             array       = array,
             rgSet       = rgSet,
@@ -826,15 +840,20 @@ load_data_server <- function(id, DIRS, cfg) {
         beta_merge_dir <- create_dir(file.path(DIRS$beta, "merged"))
         
         # Merge Beta matrices from disk (only loads one at a time)
+        notification_id <- showNotification("Merging beta matrices from disk...", type = "message", duration = 0)
         message("\nMerging beta matrices from disk...")
         beta_mg <- merge_beta_matrix_from_disk(beta_paths, beta_merge_dir)
         beta_merged(beta_mg)
         
         # Merge targets file
+        removeNotification(notification_id)
+        notification_id <- showNotification("Merging sample sheets...", type = "message", duration = 0)
         message("\nMerging sample sheets...")
         targets_result <- merge_samplesheets(arrays, DIRS$preprocessing, beta_merge_dir)
         targets_merged(targets_result$targets_merged)
         
+        removeNotification(notification_id)
+        notification_id <- showNotification("QC and beta generation completed successfully", type = "message", duration = 2)
         message("QC and beta generation completed successfully")
         
       }, error = function(e) {

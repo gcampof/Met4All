@@ -61,9 +61,7 @@ prepare_cnv_data <- function(
   
   removeNotification(notification_id)
   notification_id <- showNotification("Reading regions from BED file...", type="message", duration=0)
-  
   detail_regions <- rtracklayer::import(bed_path, format = "bed")
-  
   removeNotification(notification_id)
   notification_id <- showNotification("Creating annotation object...", type="message", duration=40)
   
