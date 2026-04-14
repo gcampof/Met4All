@@ -106,11 +106,17 @@ ui <- navbarPage(
     ")),
     div(
       class = "navbar-right-logs",
-      uiOutput("session_id_display"),
+      actionButton(
+        "restart_session",
+        tagList(icon("rotate-right"), " New Analysis"),
+        class = "btn btn-outline-danger btn-sm",
+        style = "border-radius: 20px; margin-right: 10px;"
+      ),
+      uiOutput("session_id_display")
     )
   ),
   tabPanel(
-    "New Analysis", 
+    "Load Data", 
     value = "load", 
     load_data_ui("load_data")
   ),
@@ -130,6 +136,15 @@ server <- function(input, output, session) {
   DIRS <- setup_analysis_dir(DIRS, cfg, session)
   APP_CACHE <- NULL
   
+  # Flags
+  module_initialized <- reactiveVal(FALSE)
+  heavy_components_loaded <- reactiveVal(FALSE)
+  
+  # Restart session with new analysis
+  observeEvent(input$restart_session, {
+    session$reload()
+  })
+  
   # Display session ID in navbar
   output$session_id_display <- renderUI({
     session_id <- session$token
@@ -146,10 +161,9 @@ server <- function(input, output, session) {
     )
   })
   
-  
   # Cleanup on start
   cleanup_old_analysis_dirs(DIRS$data, max_age_hours = 24)
-
+  
   # Initialize data loading
   load_data_return <- load_data_server("load_data", DIRS, cfg)
   
@@ -158,11 +172,7 @@ server <- function(input, output, session) {
     !is.null(load_data_return$beta_merged()) &&
       !is.null(load_data_return$targets_merged())
   })
-  
-  # Flags
-  module_initialized <- reactiveVal(FALSE)
-  heavy_components_loaded <- reactiveVal(FALSE)
-  
+
   # Render UI conditionally
   output$primary_analysis_ui_container <- renderUI({
     if (data_ready()) {
