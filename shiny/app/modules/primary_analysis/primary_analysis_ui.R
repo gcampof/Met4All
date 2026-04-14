@@ -154,12 +154,6 @@ primary_analysis_ui <- function(id, type_selected) {
             class = "btn btn-outline-primary w-100 text-start",
             style = "justify-content: flex-start;"
           ),
-          actionButton(
-            ns("nav_differential"),
-            "Differential Methylation",
-            class = "btn btn-outline-primary w-100 text-start",
-            style = "justify-content: flex-start;"
-          ),
           div(
             id = ns("nav_cnv_wrapper"),
             class = if (!is_idats) "nav-btn-wrapper btn-disabled-tooltip" else "nav-btn-wrapper",
