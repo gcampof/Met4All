@@ -474,7 +474,7 @@ load_data_server <- function(id, DIRS, cfg) {
           notification_id <- showNotification("Complete!", type="message", duration=3)
           
           shinyjs::hide("ld_loading_view")
-          updateNavbarPage(session, "main_navbar", selected = "primary")
+          current_view("primary")
           
           # Return only using beta and targets
           return(list(
@@ -867,7 +867,7 @@ load_data_server <- function(id, DIRS, cfg) {
       loaded_qc_data <- reactiveValues()
       
       shinyjs::hide("ld_loading_view")
-      updateNavbarPage(session, "main_navbar", selected = "primary")
+      current_view("primary")
     })
     
     return(list(
