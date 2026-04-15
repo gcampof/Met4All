@@ -1,5 +1,6 @@
+services:
   shiny:
-    image: gcampof/methylation4all-shiny:latest
+    build: ./shiny
     container_name: m4a-shiny
     ports:
       - "3838:3838"
