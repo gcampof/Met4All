@@ -11,7 +11,7 @@ source("modules/primary_analysis/cnv/cnv_utils.R")
 primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-
+    
     # Unpack results form load data
     view_initialized <- reactiveVal(FALSE)
     array_names <- load_data_return$array_names_ld
@@ -280,21 +280,38 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }
     })
     
+    
     # --- UMAP PLOT LOGIC ---
-    umap_data <- reactive({
+    # Reactive trigger for analysis
+    umap_analysis_trigger <- reactiveVal(0)
+    
+    # Prepare UMAP data (only runs when trigger changes)
+    umap_data <- eventReactive(umap_analysis_trigger(), {
+      req(
+        beta_merged(), targets_merged(),
+        input$umap_top_cpgs, input$umap_min_dist,
+        input$umap_n_neighbors, input$umap_metric,
+        input$umap_knn, input$umap_consensus_k_max,
+        input$umap_id_col, input$umap_seed
+      )
+      
+      showNotification("Running UMAP analysis...", type = "message", duration = 3)
+      
       tryCatch({
-        result <- prepare_umap_data(beta_merged(),
-                                    targets_merged(),
-                                    input$umap_top_cpgs,
-                                    input$umap_min_dist,
-                                    input$umap_n_neighbors,
-                                    input$umap_metric,
-                                    input$umap_knn,
-                                    input$umap_consensus_k_max,
-                                    input$umap_id_col,
-                                    input$umap_seed)
+        result <- prepare_umap_data(
+          beta_merged(),
+          targets_merged(),
+          input$umap_top_cpgs,
+          input$umap_min_dist,
+          input$umap_n_neighbors,
+          input$umap_metric,
+          input$umap_knn,
+          input$umap_consensus_k_max,
+          input$umap_id_col,
+          input$umap_seed
+        )
         
-        # Update targets df
+        # Update targets df with consensus clusters
         targets_merged(result$targets_updated)
         
         result$umap_df
@@ -305,6 +322,11 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         )
         NULL
       })
+    }, ignoreNULL = TRUE)
+    
+    # Run analysis when button is clicked
+    observeEvent(input$umap_run_analysis, {
+      umap_analysis_trigger(umap_analysis_trigger() + 1)
     })
     
     # Update color_by choices whenever umap_data recomputes
@@ -315,43 +337,42 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       exclude_cols <- c("Sample", "UMAP1", "UMAP2")
       color_cols <- setdiff(colnames(umap_data()), exclude_cols)
       current <- isolate(input$umap_color_by)
-      updateSelectInput(session, "umap_color_by", choices  = color_cols,
-                        selected = if (current %in% color_cols) current else color_cols[1]
-      )
+      updateSelectInput(session, "umap_color_by", 
+                        choices = color_cols,
+                        selected = if (current %in% color_cols) current else color_cols[1])
     })
     
     # Plot umap
-    output$umap_plot <- renderPlotly({
+    output$umap_plot <- renderPlot({
+      req(umap_data(), input$umap_color_by)
+      
       tryCatch({
-        p <- plot_umap(
-          umap_df     = umap_data(),
-          color_by    = input$umap_color_by,
+        plot_umap(
+          umap_df         = umap_data(),
+          color_by        = input$umap_color_by,
           legend_position = input$umap_legend_position,
-          color_palette = PALETTES()$all_palettes[[input$umap_color_palette]],
-          show_summary = input$umap_show_summary,
-          top_cpgs    = input$umap_top_cpgs,
-          min_dist    = input$umap_min_dist,
-          n_neighbors = input$umap_n_neighbors,
-          knn = input$umap_knn,
+          color_palette   = PALETTES()$all_palettes[[input$umap_color_palette]],
+          show_summary    = input$umap_show_summary,
+          show_labels     = input$umap_show_labels,
+          top_cpgs        = input$umap_top_cpgs,
+          min_dist        = input$umap_min_dist,
+          n_neighbors     = input$umap_n_neighbors,
+          knn             = input$umap_knn,
           consensus_k_max = input$umap_consensus_k_max,
-          metric      = input$umap_metric,
-          out_dir     = DIRS$umap
+          metric          = input$umap_metric,
+          out_dir         = DIRS$umap
         )
-        
-        plotly::ggplotly(p, tooltip = "text")
       }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering UMAP plot: ", error_msg))
-        )
+        shiny::validate(shiny::need(FALSE, paste0("Error rendering UMAP plot: ", e$message)))
       })
-    })
+    }, height = 750, width = 1200)
     
+    # Download handlers
     output$umap_download_png <- downloadHandler(
       filename = function() paste0("umap_plot_", Sys.Date(), ".png"),
       content = function(file) {
         src <- file.path(DIRS$umap, paste0("umap_plot_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready"))
+        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
         file.copy(src, file)
       }
     )
@@ -360,7 +381,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       filename = function() paste0("umap_plot_", Sys.Date(), ".pdf"),
       content = function(file) {
         src <- file.path(DIRS$umap, paste0("umap_plot_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready"))
+        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
         file.copy(src, file)
       }
     )
@@ -558,7 +579,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       showNotification("Running global methylation analysis...", type = "message", duration = 3)
       
       tryCatch({
-        print(APP_CACHE())
         # Return a list with parameters and data for plotting
         list(
           beta = beta_merged(),
@@ -614,7 +634,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # Plot output - just renders the cached plot
     output$global_met_plot <- renderPlot({
       req(cached_global_met_plot())
-    }, height = 750, width = 1000)
+    }, height = 750, width = 1200)
     
     # Download handlers using cached plot
     output$global_met_download_png <- downloadHandler(

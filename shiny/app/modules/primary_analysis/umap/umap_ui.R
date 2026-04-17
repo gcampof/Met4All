@@ -8,7 +8,21 @@ umap_ui <- function(ns) {
     div(
       style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
       
-      # Export buttons at top
+      # Run Analysis button at top
+      div(
+        class = "card p-3",
+        style = "flex-shrink: 0;",
+        div(
+          style = "border-left: 3px solid #0d6efd; padding-left: 10px;",
+          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
+            icon("play", style = "font-size: 0.75rem;"), " Analysis"),
+          actionButton(ns("umap_run_analysis"), "Run UMAP Analysis", 
+                       class = "btn btn-primary w-100",
+                       icon = icon("play"))
+        )
+      ),
+      
+      # Export buttons
       div(
         class = "card p-3",
         style = "flex-shrink: 0;",
@@ -29,8 +43,8 @@ umap_ui <- function(ns) {
         
         # UMAP Computation
         div(
-          style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
-          p(class = "text-uppercase fw-bold mb-2 mt-1", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
+          style = "border-left: 3px solid #6f42c1; padding-left: 10px; margin-bottom: 12px;",
+          p(class = "text-uppercase fw-bold mb-2 mt-1", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #6f42c1;",
             icon("calculator", style = "font-size: 0.75rem;"), " UMAP Parameters"),
           sliderInput(ns("umap_top_cpgs"), "Top CpGs (MAD):", 
                       min = 1000, max = 30000, value = 10000, step = 1000),
@@ -46,8 +60,8 @@ umap_ui <- function(ns) {
         
         # Clustering
         div(
-          style = "border-left: 3px solid #6f42c1; padding-left: 10px; margin-bottom: 12px;",
-          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #6f42c1;",
+          style = "border-left: 3px solid #20c997; padding-left: 10px; margin-bottom: 12px;",
+          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #20c997;",
             icon("sitemap", style = "font-size: 0.75rem;"), " Clustering"),
           sliderInput(ns("umap_knn"), "KNN:", 
                       min = 2, max = 50, value = 7, step = 1),
@@ -62,8 +76,25 @@ umap_ui <- function(ns) {
             icon("palette", style = "font-size: 0.75rem;"), " Appearance"),
           selectInput(ns("umap_id_col"), "Sample ID:", choices = NULL),
           selectInput(ns("umap_color_by"), "Color by:", choices = NULL),
+          selectInput(ns("umap_legend_position"), "Legend position:",
+                      choices = c("right", "left", "top", "bottom", "none"),
+                      selected = "right"),
           selectInput(ns("umap_color_palette"), "Palette:", choices = NULL),
-          checkboxInput(ns("umap_show_summary"), "Show summary", value = FALSE)
+          div(
+            class = "d-flex flex-column gap-2 mt-1",
+            div(
+              class = "form-check form-switch",
+              tags$input(class = "form-check-input", type = "checkbox", role = "switch",
+                         id = ns("umap_show_summary"), checked = TRUE),
+              tags$label(class = "form-check-label small", `for` = ns("umap_show_summary"), "Show summary")
+            ),
+            div(
+              class = "form-check form-switch",
+              tags$input(class = "form-check-input", type = "checkbox", role = "switch",
+                         id = ns("umap_show_labels")),
+              tags$label(class = "form-check-label small", `for` = ns("umap_show_labels"), "Show sample labels")
+            )
+          )
         )
       )
     ),
@@ -75,7 +106,7 @@ umap_ui <- function(ns) {
       div(
         class = "card p-3 plot-card",
         style = "height: 100%;",
-        plotlyOutput(ns("umap_plot"), height = "100%")
+        plotOutput(ns("umap_plot"), height = "100%",  width = "100%")     
       )
     )
   )
