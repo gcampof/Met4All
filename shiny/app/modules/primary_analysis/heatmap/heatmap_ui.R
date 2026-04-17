@@ -82,8 +82,18 @@ heatmap_ui <- function(ns){
                       choices = c("bottom", "top", "left", "right"), selected = "right"),
           selectInput(ns("heatmap_annotation_legend_position"), "Annotation Legend:",     
                       choices = c("bottom", "top", "left", "right"), selected = "bottom"),
-          checkboxInput(ns("heatmap_show_row_names"), "Show row names", value = FALSE),
-          checkboxInput(ns("heatmap_show_col_names"), "Show col names", value = FALSE)
+          div(
+            class = "form-check form-switch",
+            tags$input(class = "form-check-input", type = "checkbox", role = "switch",
+                       id = ns("heatmap_show_row_names")),
+            tags$label(class = "form-check-label small", `for` = ns("heatmap_show_row_names"), "Show row names")
+          ),
+          div(
+            class = "form-check form-switch",
+            tags$input(class = "form-check-input", type = "checkbox", role = "switch",
+                       id = ns("heatmap_show_col_names")),
+            tags$label(class = "form-check-label small", `for` = ns("heatmap_show_col_names"), "Show col names")
+          )
         )
       )
     ),
@@ -93,7 +103,7 @@ heatmap_ui <- function(ns){
       class = "flex-grow-1",
       div(
         class = "card p-3 plot-card",
-        plotOutput(ns("heatmap_plot"), height = "100%")
+        plotOutput(ns("heatmap_plot"), height = "100%", width = "100%")
       )
     )
   )

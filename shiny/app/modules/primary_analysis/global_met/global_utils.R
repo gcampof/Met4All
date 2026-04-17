@@ -118,7 +118,7 @@ plot_global_methylation <- function(
     ) +
     ggplot2::facet_wrap(~CpGType, nrow = 1) +
     ggplot2::scale_fill_manual(values = matched_colors) +
-    ggplot2::coord_cartesian(ylim = c(0.18, 0.80)) +
+    ggplot2::coord_cartesian(ylim = c(0.18, 0.85), clip = "off") +
     ggplot2::labs(
       title = plot_title,
       x = NULL,
@@ -137,6 +137,7 @@ plot_global_methylation <- function(
       axis.text.x = ggplot2::element_blank(),
       axis.ticks.x = ggplot2::element_blank(),
       axis.line = ggplot2::element_line(color = "black", size = 0.5),
+      plot.margin = ggplot2::margin(t = 10, r = 10, b = 20, l = 10),
       
       # Legend styling
       legend.title = ggplot2::element_text(size = 11),

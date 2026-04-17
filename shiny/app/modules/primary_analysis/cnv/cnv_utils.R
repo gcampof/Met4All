@@ -125,31 +125,32 @@ plot_pile_up <- function(cnv_data, baseline, comparison, out_dir) {
   notification_id <- showNotification("Generating pile-up plot...", 
                                       type = "message", duration = NULL, id = "pileup_plot")
   
-  # Create filenames
   png_file <- file.path(out_dir, paste0("cnv_pileup_", Sys.Date(), ".png"))
   pdf_file <- file.path(out_dir, paste0("cnv_pileup_", Sys.Date(), ".pdf"))
   
-  # Generate title
-  title <- paste("Pile-up plot:", 
-                 paste(baseline, collapse = ", "), 
-                 "vs", 
-                 paste(comparison, collapse = ", "))
+  title    <- "CNV Pile-up Plot"
+  subtitle <- paste0(
+    "Baseline: ", paste(baseline, collapse = ", "),
+    "     |     Comparison: ", paste(comparison, collapse = ", ")
+  )
   
-  # Save as PNG
-  png(png_file, width = 1000, height = 650, res = 100)
-  conumee2::CNV.summaryplot(cnv_data, main = title)
+  draw_pileup <- function() {
+    conumee2::CNV.summaryplot(cnv_data, main = title)
+    mtext(subtitle, side = 3, line = 0, cex = 0.75, col = "grey40")
+  }
+  
+  png(png_file, width = 1400, height = 750, res = 120)
+  draw_pileup()
   dev.off()
   
-  # Save as PDF
-  pdf(pdf_file, width = 10, height = 7)
-  conumee2::CNV.summaryplot(cnv_data, main = title)
+  pdf(pdf_file, width = 12, height = 7)
+  draw_pileup()
   dev.off()
   
   removeNotification(id = "pileup_plot")
-  
-  # Return the path to the PNG for rendering
   return(png_file)
 }
+
 
 # Plot and save per-sample plot
 plot_cnv_per_sample <- function(cnv_data, sample_name, baseline, comparison, out_dir) {

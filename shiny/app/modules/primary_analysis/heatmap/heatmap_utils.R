@@ -77,7 +77,14 @@ prepare_heatmap_cc <- function(
   top_anno <- ComplexHeatmap::HeatmapAnnotation(
     df  = anno_df,
     col = anno_colors,
-    annotation_height = grid::unit(rep(6, length(valid_cols)), "mm")
+    annotation_height = grid::unit(rep(6, length(valid_cols)), "mm"),
+    annotation_legend_param = lapply(valid_cols, function(col) {
+      n_levels <- length(unique(na.omit(as.character(anno_df[[col]]))))
+      list(
+        ncol        = max(1, ceiling(n_levels / 20)),  # wrap into columns if many levels
+        legend_gp   = grid::gpar(fontsize = 7)
+      )
+    }) |> setNames(valid_cols)
   )
   removeNotification(notification_id)
   list(mat = mat, cc = cc, targets2 = targets2, top_anno = top_anno)
@@ -140,14 +147,26 @@ plot_heatmap <- function(
     png_file <- file.path(out_dir, paste0("heatmap_", Sys.Date(), ".png"))
     pdf_file <- file.path(out_dir, paste0("heatmap_", Sys.Date(), ".pdf"))
     
+    n_samples <- ncol(mat)
+    img_width <- max(2000, n_samples * 12)
+    
+    draw_args <- list(
+      chtm,
+      merge_legends           = TRUE,
+      heatmap_legend_side     = "right",
+      annotation_legend_side  = "right",
+      padding                 = grid::unit(c(10, 40, 10, 10), "mm"),  # extra right padding
+      legend_grouping         = "original"
+    )
+    
     # PNG
-    png(png_file, width = 2000, height = 1400, res = 150)
-    ComplexHeatmap::draw(chtm)
+    png(png_file, width = img_width, height = 1400, res = 150)
+    do.call(ComplexHeatmap::draw, draw_args)
     dev.off()
     
     # PDF
-    pdf(pdf_file, width = 12, height = 8)
-    ComplexHeatmap::draw(chtm)
+    pdf(pdf_file, width = max(12, n_samples * 0.08), height = 9)
+    do.call(ComplexHeatmap::draw, draw_args)
     dev.off()
     
   }, error = function(e) {

@@ -115,7 +115,7 @@ global_met_ui <- function(ns) {
       div(
         class = "card p-3 plot-card",
         style = "height: 100%;",
-        plotOutput(ns("global_met_plot"), height = "100%")
+        plotOutput(ns("global_met_plot"), height = "100%", width = "100%")
       )
     )
   )
