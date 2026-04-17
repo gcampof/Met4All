@@ -1,7 +1,7 @@
 source("modules/primary_analysis/utils.R")
 source("modules/primary_analysis/annotations.R")
-source("modules/primary_analysis/mds/mds_server.R")
-source("modules/primary_analysis/pca/pca_server.R")
+source("modules/primary_analysis/mds/mds_utils.R")
+source("modules/primary_analysis/pca/pca_utils.R")
 source("modules/primary_analysis/umap/umap_utils.R")
 source("modules/primary_analysis/heatmap/heatmap_utils.R")
 source("modules/primary_analysis/global_met/global_utils.R")
@@ -108,11 +108,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         updateSelectInput(session, "cnv_array_select", choices = array_names(), selected = array_names()[1])
       }
     })
-    
-    # --- CALL NESTED SERVER MODULES ---
-    mds_server(beta_merged(), targets_merged(), PALETTES(), DIRS$mds, input, output, session)
-    pca_server(beta_merged(), targets_merged(), PALETTES(), DIRS$pca, input, output, session)
-    
     
     # --- NAVIGATION LOGIC ---
     observeEvent(input$nav_beta_matrix, {
@@ -279,6 +274,178 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         })
       }
     })
+    
+    # --- MDS PLOT LOGIC ---
+    # Reactive trigger for analysis
+    mds_analysis_trigger <- reactiveVal(0)
+    
+    # Prepare MDS data (only runs when trigger changes)
+    mds_data <- eventReactive(mds_analysis_trigger(), {
+      req(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
+      validate(need(!is.null(beta_merged()), "Beta data missing"))
+      validate(need(!is.null(targets_merged()), "Targets data missing"))
+      
+      showNotification("Running MDS analysis...", type = "message", duration = 3)
+      
+      tryCatch({
+        prepare_mds_data(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
+      }, error = function(e) {
+        shiny::validate(shiny::need(FALSE, paste0("Error preparing MDS data: ", e$message)))
+        NULL
+      })
+    }, ignoreNULL = TRUE)
+    
+    # Run analysis when button is clicked
+    observeEvent(input$mds_run_analysis, {
+      mds_analysis_trigger(mds_analysis_trigger() + 1)
+    })
+    
+    # Update color_by choices whenever mds_data recomputes
+    observe({
+      req(mds_data())
+      
+      # Exclude coordinate and sample ID columns
+      exclude_cols <- c("Sample", "Dim1", "Dim2")
+      color_cols <- setdiff(colnames(mds_data()), exclude_cols)
+      current <- isolate(input$mds_color_by)
+      updateSelectInput(session, "mds_color_by", 
+                        choices = color_cols,
+                        selected = if (current %in% color_cols) current else color_cols[1])
+    })
+    
+    output$mds_plot <- renderPlot({
+      # Show placeholder if analysis hasn't been run
+      if (mds_analysis_trigger() == 0) {
+        return(
+          ggplot2::ggplot() +
+            ggplot2::annotate("text", x = 1, y = 1, 
+                              label = "Click 'Run MDS Analysis' to generate plot",
+                              size = 6, color = "gray50") +
+            ggplot2::theme_void()
+        )
+      }
+      
+      req(mds_data(), input$mds_color_by, input$mds_color_palette)
+      validate(need(input$mds_color_palette %in% names(PALETTES()$all_palettes), "Invalid palette"))
+      
+      tryCatch({
+        plot_mds(mds_data(), input$mds_color_by, PALETTES()$all_palettes[[input$mds_color_palette]], DIRS$mds)
+        
+      }, error = function(e) {
+        shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
+      })
+    }, height = 750, width = 1200)
+    
+    output$mds_download_png <- downloadHandler(
+      filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
+      content = function(file) {
+        src <- file.path(DIRS$mds, paste0("mds_plot_", Sys.Date(), ".png"))
+        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
+    
+    output$mds_download_pdf <- downloadHandler(
+      filename = function() paste0("mds_plot_", Sys.Date(), ".pdf"),
+      content = function(file) {
+        src <- file.path(DIRS$mds, paste0("mds_plot_", Sys.Date(), ".pdf"))
+        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
+    
+    # --- PCA PLOT LOGIC
+    # Reactive trigger for analysis
+    pca_analysis_trigger <- reactiveVal(0)
+    
+    # Prepare PCA data (only runs when trigger changes)
+    pca_data <- eventReactive(pca_analysis_trigger(), {
+      req(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
+      
+      validate(need(!is.null(beta_merged()), "Beta data missing"))
+      validate(need(!is.null(targets_merged()), "Targets data missing"))
+      
+      showNotification("Running PCA analysis...", type = "message", duration = 3)
+      
+      tryCatch({
+        prepare_pca_data(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
+      }, error = function(e) {
+        shiny::validate(
+          shiny::need(FALSE, paste0("Error preparing PCA data: ", e$message))
+        )
+        NULL
+      })
+    }, ignoreNULL = TRUE)
+    
+    # Run analysis when button is clicked
+    observeEvent(input$pca_run_analysis, {
+      pca_analysis_trigger(pca_analysis_trigger() + 1)
+    })
+    
+    # Update color_by choices whenever pca_data recomputes
+    observe({
+      req(pca_data())
+      
+      # Exclude coordinate and sample ID columns
+      exclude_cols <- c("Sample", "PC1", "PC2", "PC3")
+      color_cols <- setdiff(colnames(pca_data()), exclude_cols)
+      current <- isolate(input$pca_color_by)
+      updateSelectInput(session, "pca_color_by", 
+                        choices = color_cols,
+                        selected = if (current %in% color_cols) current else color_cols[1])
+    })
+    
+    output$pca_plot <- renderPlot({
+      # Show placeholder if analysis hasn't been run
+      if (pca_analysis_trigger() == 0) {
+        return(
+          ggplot2::ggplot() +
+            ggplot2::annotate("text", x = 1, y = 1, 
+                              label = "Click 'Run PCA Analysis' to generate plot",
+                              size = 6, color = "gray50") +
+            ggplot2::theme_void()
+        )
+      }
+      
+      req(pca_data(), input$pca_color_by, input$pca_color_palette, input$pca_dims)
+      
+      validate(need(
+        input$pca_color_palette %in% names(PALETTES()$all_palettes),
+        "Invalid palette"
+      ))
+      
+      tryCatch({
+        plot_pca(
+          pca_data(),
+          input$pca_color_by,
+          input$pca_dims,
+          PALETTES()$all_palettes[[input$pca_color_palette]],
+          DIRS$pca
+        )
+      }, error = function(e) {
+        shiny::validate(
+          shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
+        )
+      })
+    }, height = 750, width = 1200)
+    
+    output$pca_download_png <- downloadHandler(
+      filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
+      content = function(file) {
+        src <- file.path(DIRS$pca, paste0("pca_plot_", input$pca_dims, "_", Sys.Date(), ".png"))
+        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
+    
+    output$pca_download_pdf <- downloadHandler(
+      filename = function() paste0("pca_plot_", Sys.Date(), ".pdf"),
+      content = function(file) {
+        src <- file.path(DIRS$pca, paste0("pca_plot_", input$pca_dims, "_", Sys.Date(), ".pdf"))
+        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
     
     
     # --- UMAP PLOT LOGIC ---

@@ -8,33 +8,36 @@ umap_ui <- function(ns) {
     div(
       style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
       
-      # Run Analysis button at top
+      # ---- TOP ACTION BAR  ----
       div(
         class = "card p-3",
         style = "flex-shrink: 0;",
+        
+        # Run Analysis Button
         div(
-          style = "border-left: 3px solid #0d6efd; padding-left: 10px;",
-          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
-            icon("play", style = "font-size: 0.75rem;"), " Analysis"),
-          actionButton(ns("umap_run_analysis"), "Run UMAP Analysis", 
-                       class = "btn btn-primary w-100",
-                       icon = icon("play"))
+          style = "margin-bottom: 12px;",
+          actionButton(
+            ns("umap_run_analysis"),
+            " Run Analysis",
+            class = "btn btn-primary w-100",
+            icon = icon("play"),
+            style = "font-weight: bold;"
+          )
+        ),
+        
+        # Export Buttons
+        div(
+          style = "border-top: 1px solid #dee2e6; padding-top: 12px;",
+          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
+            icon("download", style = "font-size: 0.75rem;"), " Export"),
+          div(
+            class = "d-flex gap-2",
+            downloadButton(ns("umap_download_png"), " PNG",class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+            downloadButton(ns("umap_download_pdf"), " PDF", class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+          )
         )
       ),
       
-      # Export buttons
-      div(
-        class = "card p-3",
-        style = "flex-shrink: 0;",
-        div(
-          style = "border-left: 3px solid #fd7e14; padding-left: 10px;",
-          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
-            icon("download", style = "font-size: 0.75rem;"), " Export Plot"),
-          div(class = "d-flex gap-2",
-              downloadButton(ns("umap_download_png"), " PNG", class = "btn btn-sm btn-outline-secondary flex-grow-1"),
-              downloadButton(ns("umap_download_pdf"), " PDF", class = "btn btn-sm btn-outline-secondary flex-grow-1"))
-        )
-      ),
       
       # Parameters panel (scrollable)
       div(
