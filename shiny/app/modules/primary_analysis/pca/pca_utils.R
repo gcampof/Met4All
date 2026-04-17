@@ -58,28 +58,22 @@ plot_pca <- function(pca_df, color_by, dims, color_palette, out_dir) {
     ggplot2::theme(
       axis.title = ggplot2::element_text(size = 12),
       axis.text = ggplot2::element_text(size = 10),
-      axis.line = ggplot2::element_line(color = "black", size = 0.5),
+      axis.line = ggplot2::element_line(color = "black", linewidth = 0.5),
       legend.title = ggplot2::element_text(size = 11),
       legend.text = ggplot2::element_text(size = 9),
       legend.position = "right"
     )
   
-  # convert to plotly 
-  gp <- plotly::ggplotly(
-    p,
-    tooltip = "text"
-  )
-  
   # Save to disk
   tryCatch({
-    png_file <- file.path(out_dir, paste0("pca_plot_", dims, "_", Sys.Date(), ".png"))
+    png_file <- file.path(out_dir, paste0("pca_plot_", gsub(" ", "_", dims), "_", Sys.Date(), ".png"))
     ggplot2::ggsave(png_file, p, width = 10, height = 6.5, dpi = 150, bg = "white")
     
-    pdf_file <- file.path(out_dir, paste0("pca_plot_", dims, "_", Sys.Date(), ".pdf"))
+    pdf_file <- file.path(out_dir, paste0("pca_plot_", gsub(" ", "_", dims), "_", Sys.Date(), ".pdf"))
     ggplot2::ggsave(pdf_file, p, width = 10, height = 6.5, bg = "white")
   }, error = function(e) {
     warning("Could not save plots: ", e$message)
   })
   
-  return(gp)
+  return(p)
 }
