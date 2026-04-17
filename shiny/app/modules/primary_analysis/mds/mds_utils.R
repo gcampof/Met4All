@@ -40,17 +40,11 @@ plot_mds <- function(mds_df, color_by, color_palette, out_dir) {
     ggplot2::theme(
       axis.title = ggplot2::element_text(size = 12),
       axis.text = ggplot2::element_text(size = 10),
-      axis.line = ggplot2::element_line(color = "black", size = 0.5),
+      axis.line = ggplot2::element_line(color = "black", linewidth = 0.5),
       legend.title = ggplot2::element_text(size = 11),
       legend.text = ggplot2::element_text(size = 9),
       legend.position = "right"
     )
-  
-  # convert to plotly 
-  gp <- plotly::ggplotly(
-    p,
-    tooltip = "text"
-  )
   
   # Save to disk
   tryCatch({
@@ -63,5 +57,5 @@ plot_mds <- function(mds_df, color_by, color_palette, out_dir) {
     warning("Could not save plots: ", e$message)
   })
   
-  return(gp)
+  return(p) 
 }
