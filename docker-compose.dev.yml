@@ -9,15 +9,3 @@ services:
     volumes:
       - ./shiny/app:/home/rstudio/project/shiny
     restart: unless-stopped
- 
-  shiny:
-    build: ./shiny
-    container_name: m4a-shiny
-    ports:
-      - "3838:3838"
-    volumes:
-      - ./shiny/app:/srv/shiny-server
-      - ./shiny/logs:/var/log/shiny-server
-    environment:
-      - R_CONFIG_ACTIVE=default
-    restart: unless-stopped
