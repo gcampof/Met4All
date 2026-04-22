@@ -1,4 +1,4 @@
-# Methylation For All (M4A-shiny)
+# Methylation4All (M4A)
 
 **M4A** is a web-based application for DNA methylation analysis, no coding required. It runs entirely inside [Docker](https://docs.docker.com/get-docker/), so you don't need to install R, Bioconductor, or any dependencies manually. 
 
