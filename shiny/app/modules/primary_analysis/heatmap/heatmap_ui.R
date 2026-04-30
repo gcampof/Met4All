@@ -54,7 +54,7 @@ heatmap_ui <- function(ns){
           style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
           p(class = "text-uppercase fw-bold mb-2 mt-1", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
             icon("dna", style = "font-size: 0.75rem;"), " CpG Selection"),
-          sliderInput(ns("heatmap_top"), "Top CpGs:", min = 0, max = 10000, value = 1000, step = 100),
+          sliderInput(ns("heatmap_top"), "Top CpGs:", min = 1000, max = 20000, value = 10000, step = 1000),
           selectInput(ns("heatmap_annotation_cols"), "Annotation columns:", choices = NULL)
         ),
         

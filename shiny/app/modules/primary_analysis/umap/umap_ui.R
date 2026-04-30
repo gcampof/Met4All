@@ -50,7 +50,7 @@ umap_ui <- function(ns) {
           p(class = "text-uppercase fw-bold mb-2 mt-1", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #6f42c1;",
             icon("calculator", style = "font-size: 0.75rem;"), " UMAP Parameters"),
           sliderInput(ns("umap_top_cpgs"), "Top CpGs (MAD):", 
-                      min = 1000, max = 30000, value = 10000, step = 1000),
+                      min = 1000, max = 20000, value = 10000, step = 1000),
           sliderInput(ns("umap_min_dist"), "Min distance:",  
                       min = 0.01, max = 0.99, value = 0.1, step = 0.01),
           sliderInput(ns("umap_n_neighbors"), "N neighbors:",  
