@@ -113,7 +113,7 @@ ui <- fluidPage(
     div(
       class = "navbar-brand-custom",
       icon("dna", style = "color: #2c7fb8; margin-right: 10px;"),
-      span("Methylation4All")
+      span("Met4All")
     ),
     div(
       class = "navbar-right",
