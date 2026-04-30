@@ -1,6 +1,6 @@
-# Methylation4All (M4A)
+# Met4All
 
-**M4A** is a web-based application for DNA methylation analysis, no coding required. It runs entirely inside [Docker](https://docs.docker.com/get-docker/), so you don't need to install R, Bioconductor, or any dependencies manually. 
+**Met4All** is a web-based application for DNA methylation analysis, no coding required. It runs entirely inside [Docker](https://docs.docker.com/get-docker/), so you don't need to install R, Bioconductor, or any dependencies manually. 
 
 A pre-built Docker image is available on Docker Hub: [gcampof/methylation4all-shiny](https://hub.docker.com/r/gcampof/methylation4all-shiny), allowing you to get started quickly without building from source.
 
@@ -8,14 +8,14 @@ Just launch it and open your browser.
 
 ---
 
-## What M4A Can Do
+## What Met4All Can Do
 
-M4A accepts two types of input:
+v accepts two types of input:
 
 - **Raw IDAT files**: the direct output from Illumina 450k, EPIC, or EPICv2 arrays
 - **A pre-computed beta matrix**: a table of methylation values (rows = CpG sites, columns = samples)
 
-When you provide IDATs, M4A will automatically preprocess, normalize, and filter your data before analysis. From the resulting beta matrix, the application gives you access to:
+When you provide IDATs, Met4All will automatically preprocess, normalize, and filter your data before analysis. From the resulting beta matrix, the application gives you access to:
 
 | Analysis | Available from |
 |---|---|
@@ -70,7 +70,7 @@ chmod 777 ./shiny/logs ./shiny/app/data ./shiny/app/cache
 
 > These directories are where the app writes logs, user uploads, and analysis results. The app code itself is bundled inside the Docker image and does not need to be present on your machine.
 
-### Step 3 - Start M4A
+### Step 3 - Start Met4All
 
 Pull the pre-built image from DockerHub and start the app:
 
@@ -86,13 +86,13 @@ Once the container is running, open your browser and go to:
 
 **http://localhost:3838**
 
-The M4A interface will load and you're ready to start your analysis.
+The Met4All interface will load and you're ready to start your analysis.
 
 ---
 
 ## Updating to a New Version
 
-To update M4A, edit `docker-compose.prod.yml` and change the image tag to the new version, then pull and restart:
+To update Met4All, edit `docker-compose.prod.yml` and change the image tag to the new version, then pull and restart:
 
 ```bash
 docker compose -f docker-compose.prod.yml pull shiny
@@ -103,7 +103,7 @@ Your data in `./shiny/app/data/` is not affected by updates.
 
 ---
 
-## Stopping M4A
+## Stopping Met4All
 
 ```bash
 docker compose -f docker-compose.prod.yml down
@@ -149,13 +149,13 @@ docker logs m4a-shiny
 ## Notes
 
 - Analysis results are saved to `./shiny/app/data/` on your machine and persist between sessions. Folders older than 24 hours are cleaned up automatically on next launch.
-- M4A is configured with `restart: unless-stopped`, so it will automatically start again after a system reboot as long as Docker is running.
+- Met4All is configured with `restart: unless-stopped`, so it will automatically start again after a system reboot as long as Docker is running.
 
 ---
 
 ## For Developers
 
-The section below is intended for users who want to modify or extend M4A.
+The section below is intended for users who want to modify or extend Met4All.
 
 ### Building from Source
 
