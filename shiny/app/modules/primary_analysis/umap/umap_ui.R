@@ -41,6 +41,31 @@ umap_ui <- function(ns) {
             numericInput(ns("umap_export_width"), "Width (in):", value = 10, min = 1, max = 40, step = 0.5),
             numericInput(ns("umap_export_height"), "Height (in):", value = 6.5, min = 1, max = 40, step = 0.5)
           )
+        ),
+        
+        # Predict section
+        div(
+          style = "border-top: 1px solid #dee2e6; padding-top: 12px; margin-top: 4px;",
+          p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #6f42c1;",
+            icon("cube", style = "font-size: 0.75rem;"), " UMAP Predict"),
+          
+          # Download trained model
+          downloadButton(ns("umap_download_model"), " Download Model (.rds)",
+                         class = "btn btn-sm btn-outline-secondary w-100 mb-2"),
+          
+          # Upload model for prediction
+          div(
+            style = "border-top: 1px solid #f0f0f0; padding-top: 10px; margin-top: 2px;",
+            p(class = "text-muted mb-1", style = "font-size: 0.72rem;",
+              icon("upload", style = "font-size: 0.7rem;"), " Upload model to project current samples:"),
+            fileInput(ns("umap_upload_model"), label = NULL,
+                      accept = ".rds",
+                      buttonLabel = "Browse...",
+                      placeholder = "No model selected"),
+            actionButton(ns("umap_run_predict"), " Run Projection",
+                         class = "btn btn-sm btn-outline-primary w-100",
+                         icon = icon("play"))
+          )
         )
       ),
       

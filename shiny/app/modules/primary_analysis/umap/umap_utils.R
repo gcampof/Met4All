@@ -87,10 +87,10 @@ prepare_umap_data <- function(
   # Return both
   list(
     umap_df = df,
-    targets_updated = targets_updated
+    targets_updated = targets_updated,
+    um_model = um
   )
 }
-
 
 plot_umap <- function(
     umap_df,
@@ -99,12 +99,13 @@ plot_umap <- function(
     color_palette,
     show_summary = TRUE,
     show_labels = FALSE,
-    top_cpgs,
-    min_dist,
-    n_neighbors,
-    knn,
-    consensus_k_max,
-    metric
+    top_cpgs = NULL,
+    min_dist = NULL,
+    n_neighbors = NULL,
+    knn = NULL,
+    consensus_k_max = NULL,
+    metric = NULL,
+    is_predicted = FALSE
 ) {
   
   df <- data.frame(
@@ -126,13 +127,27 @@ plot_umap <- function(
   }
   
   # summary string
-  summary_txt <- paste0(
-    "CpGs=", top_cpgs,
-    " | min_dist=", min_dist,
-    " | n_neighbors=", n_neighbors,
-    " | metric=", metric,
-    " | color=", color_label
-  )
+  if (is_predicted) {
+    summary_txt <- paste0(
+      "Predicted embedding | New samples projected onto uploaded UMAP model",
+      " | color=", color_by
+    )
+  } else {
+    # Support additional information for walktrap
+    color_label <- if (color_by == "snn_walktrap_cluster") {
+      paste0(color_by, " (knn=", knn, ", k_max=", consensus_k_max, ")")
+    } else {
+      color_by
+    }
+    
+    summary_txt <- paste0(
+      "CpGs=", top_cpgs,
+      " | min_dist=", min_dist,
+      " | n_neighbors=", n_neighbors,
+      " | metric=", metric,
+      " | color=", color_label
+    )
+  }
   
   # base ggplot 
   p <- ggplot2::ggplot(
@@ -178,3 +193,50 @@ plot_umap <- function(
   
   return(p)
 }
+
+
+
+predict_umap <- function(beta, umap_model) {
+  
+  umap_features <- colnames(umap_model$data)
+  matched_cpgs  <- intersect(umap_features, rownames(beta))
+  
+  shiny::validate(
+    shiny::need(length(matched_cpgs) > 0,
+                "No overlapping CpGs between UMAP model and new data.")
+  )
+  
+  # Build aligned matrix (samples x features), fill unmatched CpGs with 0
+  aligned_matrix <- matrix(0, nrow = ncol(beta), ncol = length(umap_features))
+  colnames(aligned_matrix) <- umap_features
+  rownames(aligned_matrix) <- colnames(beta)
+  aligned_matrix[, matched_cpgs] <- t(beta[matched_cpgs, ])
+  
+  # Predict new coordinates
+  new_umap_embedding <- umap:::predict.umap(umap_model, aligned_matrix)
+  rownames(new_umap_embedding) <- rownames(aligned_matrix)
+  
+  # Combine training + new
+  training_embedding  <- umap_model$layout
+  umap_combined       <- rbind(training_embedding, new_umap_embedding)
+  
+  sample_ids_training <- rownames(training_embedding)
+  sample_ids_new      <- rownames(new_umap_embedding)
+  all_ids             <- c(sample_ids_training, sample_ids_new)
+  
+  umap_df <- data.frame(
+    Sample        = all_ids,
+    UMAP1         = umap_combined[, 1],
+    UMAP2         = umap_combined[, 2],
+    sample_origin = factor(
+      ifelse(all_ids %in% sample_ids_new, "New Sample", "Training"),
+      levels = c("Training", "New Sample")
+    ),
+    stringsAsFactors = FALSE,
+    row.names = all_ids
+  )
+  
+  return(umap_df)
+}
+
+

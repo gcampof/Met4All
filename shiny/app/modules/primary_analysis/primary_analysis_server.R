@@ -482,6 +482,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # Reactive trigger for analysis
     umap_analysis_trigger <- reactiveVal(0)
     cached_umap_plot <- reactiveVal(NULL)
+    cached_umap_model <- reactiveVal(NULL)
     
     # Prepare UMAP data (only runs when trigger changes)
     umap_data <- eventReactive(umap_analysis_trigger(), {
@@ -512,6 +513,9 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         # Update targets df with consensus clusters
         targets_merged(result$targets_updated)
         
+        # Store UMAP model for download
+        cached_umap_model(result$um_model)
+        
         result$umap_df
       }, error = function(e) {
         error_msg <- e$message
@@ -539,31 +543,147 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
                         choices = color_cols,
                         selected = if (current %in% color_cols) current else color_cols[1])
     })
+   
     
-    # Plot umap
-    output$umap_plot <- renderPlot({
-      req(umap_data(), input$umap_color_by)
+    # UMAP PREDICT
+    # Download UMAP model
+    output$umap_download_model <- downloadHandler(
+      filename = function() paste0("umap_model_", Sys.Date(), ".rds"),
+      content = function(file) {
+        req(cached_umap_model())
+        saveRDS(cached_umap_model(), file)
+      }
+    )
+    
+    # upload UMAP model
+    observeEvent(input$umap_upload_model, {
+      req(input$umap_upload_model)
       
       tryCatch({
-        p <- plot_umap(
-          umap_df         = umap_data(),
-          color_by        = input$umap_color_by,
-          legend_position = input$umap_legend_position,
-          color_palette   = PALETTES()$all_palettes[[input$umap_color_palette]],
-          show_summary    = input$umap_show_summary,
-          show_labels     = input$umap_show_labels,
-          top_cpgs        = input$umap_top_cpgs,
-          min_dist        = input$umap_min_dist,
-          n_neighbors     = input$umap_n_neighbors,
-          knn             = input$umap_knn,
-          consensus_k_max = input$umap_consensus_k_max,
-          metric          = input$umap_metric
-        )
-        cached_umap_plot(p)
-        p
+        file_info <- input$umap_upload_model
+        in_path   <- file_info$datapath
+        file_name <- file_info$name
+        
+        # Validate it's an RDS file
+        if (!grepl("\\.rds$", file_name, ignore.case = TRUE)) {
+          showNotification("Please upload a valid .rds file", type = "error", duration = 5)
+          return()
+        }
+        
+        out_path <- file.path(DIRS$umap, file_name)
+        file.copy(from = in_path, to = out_path, overwrite = TRUE)
+        
+        # Load and store the model
+        model <- readRDS(out_path)
+        cached_umap_model(model)
+        
+        showNotification("UMAP model loaded successfully", type = "message", duration = 3)
       }, error = function(e) {
-        shiny::validate(shiny::need(FALSE, paste0("Error rendering UMAP plot: ", e$message)))
+        showNotification(paste("Error loading UMAP model:", e$message), type = "error", duration = 5)
       })
+    })
+    
+    # Predict UMAP
+    # Reactive to store predicted umap df
+    predicted_umap_df <- reactiveVal(NULL)
+    
+    # umap mode flag
+    umap_mode <- reactiveVal("training")
+    
+    # Run prediction when button is clicked
+    observeEvent(input$umap_run_predict, {
+      
+      # Check model exists — either uploaded or trained in session
+      if (is.null(cached_umap_model())) {
+        showNotification("No UMAP model found. Please upload a model first.", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      req(beta_merged())
+      
+      showNotification("Running UMAP projection...", type = "message", duration = 3)
+      
+      tryCatch({
+        df <- predict_umap(
+          beta       = beta_merged(),
+          umap_model = cached_umap_model()
+        )
+        
+        predicted_umap_df(df)
+        umap_mode("predicted")
+        
+        # Update color_by choices to reflect predicted df columns
+        exclude_cols <- c("Sample", "UMAP1", "UMAP2")
+        color_cols <- setdiff(colnames(df), exclude_cols)
+        updateSelectInput(session, "umap_color_by",
+                          choices = color_cols,
+                          selected = "sample_origin")
+        
+        showNotification("Projection complete.", type = "message", duration = 3)
+      }, error = function(e) {
+        showNotification(paste("Error during UMAP projection:", e$message), 
+                         type = "error", duration = 5)
+      })
+    })
+    
+    # Unified umap_plot — switches between training and predicted mode
+    output$umap_plot <- renderPlot({
+      
+      if (umap_mode() == "predicted") {
+        req(predicted_umap_df(), input$umap_color_by)
+        tryCatch({
+          p <- plot_umap(
+            umap_df         = predicted_umap_df(),
+            color_by        = input$umap_color_by,
+            legend_position = input$umap_legend_position,
+            color_palette   = PALETTES()$all_palettes[[input$umap_color_palette]],
+            show_summary    = input$umap_show_summary,
+            show_labels     = input$umap_show_labels,
+            is_predicted    = TRUE
+          )
+          cached_umap_plot(p)
+          p
+        }, error = function(e) {
+          shiny::validate(shiny::need(FALSE, paste0("Error rendering predicted UMAP: ", e$message)))
+        })
+        
+      } else {
+        # Show placeholder if analysis hasn't been run yet
+        if (umap_analysis_trigger() == 0) {
+          return(
+            ggplot2::ggplot() +
+              ggplot2::annotate("text", x = 1, y = 1,
+                                label = "Click 'Run Analysis' to generate plot",
+                                size = 6, color = "gray50") +
+              ggplot2::theme_void()
+          )
+        }
+        
+        req(umap_data(), input$umap_color_by)
+        tryCatch({
+          p <- plot_umap(
+            umap_df         = umap_data(),
+            color_by        = input$umap_color_by,
+            legend_position = input$umap_legend_position,
+            color_palette   = PALETTES()$all_palettes[[input$umap_color_palette]],
+            show_summary    = input$umap_show_summary,
+            show_labels     = input$umap_show_labels,
+            top_cpgs        = input$umap_top_cpgs,
+            min_dist        = input$umap_min_dist,
+            n_neighbors     = input$umap_n_neighbors,
+            knn             = input$umap_knn,
+            consensus_k_max = input$umap_consensus_k_max,
+            metric          = input$umap_metric,
+            is_predicted    = FALSE
+          )
+          cached_umap_plot(p)
+          p
+        }, error = function(e) {
+          shiny::validate(shiny::need(FALSE, paste0("Error rendering UMAP plot: ", e$message)))
+        })
+      }
+      
     }, height = 750, width = 1200)
     
     # Download handlers

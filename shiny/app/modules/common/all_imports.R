@@ -18,6 +18,7 @@ library(bluster)
 library(BiocNeighbors)
 library(ConsensusClusterPlus)
 library(umap)
+library(uwot)
 library(igraph)
 library(ComplexHeatmap)
 
