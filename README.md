@@ -57,8 +57,8 @@ Before you begin, make sure you have:
 Open a terminal and run:
 
 ```bash
-git clone https://github.com/gcampof/M4A-shiny.git
-cd M4A-shiny
+git clone https://github.com/gcampof/Met4All.git
+cd Met4All
 ```
 
 ### Step 2 - Prepare data directories
@@ -123,7 +123,7 @@ ls ./shiny/logs/
 cat ./shiny/logs/<logfile>.log
 
 # Or check the container logs directly
-docker logs m4a-shiny
+docker logs Met4All
 ```
 
 ---
