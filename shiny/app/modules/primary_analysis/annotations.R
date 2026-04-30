@@ -82,61 +82,6 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
 #' (i.e. one probe links to more than one group/gene)
 #' @value A matrix of beta values per gene and sample.
 #' 
-methylation_genemat <- function(beta.matrix, annotation, group = "TSS200",
-                                rm_mmap = FALSE){
-  group <- match.arg(group, choices = c("TSS200", "TSS1500", "Body", "BodyUTR"))
-  
-  if (! group %in% c("TSS200", "TSS1500", "Body", "BodyUTR")){
-    stop("Group should be one of the stated in the documentation.")
-  }
-  if (group == "TSS200"){
-    groupingfactor <- "Promoter200"
-  }
-  if (group == "TSS1500"){
-    groupingfactor <- c("Promoter200", "Promoter1500")
-  }
-  if (group == "Body"){
-    groupingfactor <- "Body"
-  }
-  if (group == "BodyUTR"){
-    groupingfactor <- c("Body", "3'UTR")
-  }
-  
-  mat <- matrix(0,
-                nrow = length(unique(annotation$UCSC_Gene[annotation$Group %in% groupingfactor])),
-                ncol = ncol(beta.matrix),
-                dimnames = list(c(unique(annotation$UCSC_Gene[annotation$Group %in% groupingfactor])),
-                                c(colnames(beta.matrix))))
-  
-  print(nrow(mat))
-  
-  if (rm_mmap == TRUE){
-    aux <- annotation %>% group_by(Name) %>% 
-      summarize(n = length(chr), nd = n_distinct(Group))
-    orig_dim <- nrow(aux)
-    aux <- aux[aux$nd == 1, ]
-    annotation <- annotation[annotation$Name %in% aux$Name, ]
-    message("Multimapping probes removed: ", 
-            round((100*nrow(aux)/orig_dim), 4),
-            "% of probes remaining. ")
-    rm(orig_dim)
-  } else {
-    message("Using all probes")
-  }
-  for (g in 1:nrow(mat)){
-    myProbes <- unique(annotation$Name[which(annotation$UCSC_Gene == rownames(mat)[g] &
-                                               annotation$Group %in% groupingfactor)])
-    mat[g, ] <- apply(beta.matrix[rownames(beta.matrix) %in% myProbes, , drop = FALSE],
-                      2, median, na.rm = TRUE)
-  }
-  
-  mat_clean <- mat[rowSums(is.na(mat)) != (ncol(mat)), ]
-  print(mat_clean)
-  message("finished gene annotation")
-  return(mat_clean)
-}
-
-
 methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
                                    rm_mmap = FALSE){
   library(data.table)

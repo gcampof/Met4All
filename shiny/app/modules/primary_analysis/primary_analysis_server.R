@@ -7,6 +7,7 @@ source("modules/primary_analysis/heatmap/heatmap_utils.R")
 source("modules/primary_analysis/global_met/global_utils.R")
 source("modules/primary_analysis/differential/differential_utils.R")
 source("modules/primary_analysis/cnv/cnv_utils.R")
+source("modules/primary_analysis/samplesheet_ui.R")
 
 primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
   moduleServer(id, function(input, output, session) {
@@ -164,6 +165,16 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       update_active_button("nav_cnv")
       show_view("view_cnv", "CNV")
     }) 
+    observeEvent(input$nav_cnv, {
+      current_view("cnv")
+      update_active_button("nav_cnv")
+      show_view("view_cnv", "CNV")
+    }) 
+    observeEvent(input$nav_samplesheet, {
+      current_view("samplesheet")
+      update_active_button("nav_samplesheet")
+      show_view("view_samplesheet", "Explore Samplesheet")
+    })
     
     # --- DOWNLOAD BUTTONS BETA/TARGETS ---
     output$download_beta <- downloadHandler(
@@ -178,12 +189,12 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- DOWNLOAD TARGETS ---
     output$download_targets <- downloadHandler(
-	  filename = function() "targets_merged.csv",
-	  content = function(file) {
-		req(targets_merged())
-		write.csv(targets_merged(), file, row.names = TRUE)
-	  }
-	)
+      filename = function() "targets_merged.csv",
+      content = function(file) {
+        req(targets_merged())
+        write.csv(targets_merged(), file, row.names = TRUE)
+      }
+    )
     
     # --- BETA MATRIX BOXPLOT UI ---
     output$beta_matrix_tabs <- renderUI({
@@ -276,6 +287,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # --- MDS PLOT LOGIC ---
     # Reactive trigger for analysis
     mds_analysis_trigger <- reactiveVal(0)
+    cached_mds_plot <- reactiveVal(NULL)
     
     # Prepare MDS data (only runs when trigger changes)
     mds_data <- eventReactive(mds_analysis_trigger(), {
@@ -327,8 +339,9 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       validate(need(input$mds_color_palette %in% names(PALETTES()$all_palettes), "Invalid palette"))
       
       tryCatch({
-        plot_mds(mds_data(), input$mds_color_by, PALETTES()$all_palettes[[input$mds_color_palette]], DIRS$mds)
-        
+        p <- plot_mds(mds_data(), input$mds_color_by, PALETTES()$all_palettes[[input$mds_color_palette]])
+        cached_mds_plot(p)
+        p
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
       })
@@ -337,24 +350,34 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     output$mds_download_png <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
       content = function(file) {
-        src <- file.path(DIRS$mds, paste0("mds_plot_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_mds_plot(), input$mds_export_width, input$mds_export_height)
+        ggplot2::ggsave(file, cached_mds_plot(), width = input$mds_export_width,
+                        height = input$mds_export_height, dpi = 150, bg = "white", device = "png")
       }
     )
     
     output$mds_download_pdf <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".pdf"),
       content = function(file) {
-        src <- file.path(DIRS$mds, paste0("mds_plot_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_mds_plot(), input$mds_export_width, input$mds_export_height)
+        ggplot2::ggsave(file, cached_mds_plot(), width = input$mds_export_width,
+                        height = input$mds_export_height, bg = "white", device = "pdf")
+      }
+    )
+    
+    output$mds_download_svg <- downloadHandler(
+      filename = function() paste0("pca_plot_", Sys.Date(), ".svg"),
+      content = function(file) {
+        req(cached_mds_plot(), input$mds_export_width, input$mds_export_height)
+        ggplot2::ggsave(file, cached_mds_plot(), width = input$mds_export_width,
+                        height = input$mds_export_height, bg = "white", device = svglite::svglite)
       }
     )
     
     # --- PCA PLOT LOGIC
     # Reactive trigger for analysis
     pca_analysis_trigger <- reactiveVal(0)
+    cached_pca_plot <- reactiveVal(NULL)
     
     # Prepare PCA data (only runs when trigger changes)
     pca_data <- eventReactive(pca_analysis_trigger(), {
@@ -413,13 +436,14 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       ))
       
       tryCatch({
-        plot_pca(
+        p <- plot_pca(
           pca_data(),
           input$pca_color_by,
           input$pca_dims,
-          PALETTES()$all_palettes[[input$pca_color_palette]],
-          DIRS$pca
+          PALETTES()$all_palettes[[input$pca_color_palette]]
         )
+        cached_pca_plot(p)
+        p
       }, error = function(e) {
         shiny::validate(
           shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
@@ -430,25 +454,34 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     output$pca_download_png <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
       content = function(file) {
-        src <- file.path(DIRS$pca, paste0("pca_plot_", input$pca_dims, "_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_pca_plot(), input$pca_export_width, input$pca_export_height)
+        ggplot2::ggsave(file, cached_pca_plot(), width = input$pca_export_width,
+                        height = input$pca_export_height, dpi = 150, bg = "white", device = "png")
       }
     )
     
     output$pca_download_pdf <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".pdf"),
       content = function(file) {
-        src <- file.path(DIRS$pca, paste0("pca_plot_", input$pca_dims, "_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_pca_plot(), input$pca_export_width, input$pca_export_height)
+        ggplot2::ggsave(file, cached_pca_plot(), width = input$pca_export_width,
+                        height = input$pca_export_height, bg = "white", device = "pdf")
       }
     )
     
+    output$pca_download_svg <- downloadHandler(
+      filename = function() paste0("pca_plot_", Sys.Date(), ".svg"),
+      content = function(file) {
+        req(cached_pca_plot(), input$pca_export_width, input$pca_export_height)
+        ggplot2::ggsave(file, cached_pca_plot(), width = input$pca_export_width,
+                        height = input$pca_export_height, bg = "white", device = svglite::svglite)
+      }
+    )
     
     # --- UMAP PLOT LOGIC ---
     # Reactive trigger for analysis
     umap_analysis_trigger <- reactiveVal(0)
+    cached_umap_plot <- reactiveVal(NULL)
     
     # Prepare UMAP data (only runs when trigger changes)
     umap_data <- eventReactive(umap_analysis_trigger(), {
@@ -512,7 +545,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       req(umap_data(), input$umap_color_by)
       
       tryCatch({
-        plot_umap(
+        p <- plot_umap(
           umap_df         = umap_data(),
           color_by        = input$umap_color_by,
           legend_position = input$umap_legend_position,
@@ -524,9 +557,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           n_neighbors     = input$umap_n_neighbors,
           knn             = input$umap_knn,
           consensus_k_max = input$umap_consensus_k_max,
-          metric          = input$umap_metric,
-          out_dir         = DIRS$umap
+          metric          = input$umap_metric
         )
+        cached_umap_plot(p)
+        p
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error rendering UMAP plot: ", e$message)))
       })
@@ -536,20 +570,30 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     output$umap_download_png <- downloadHandler(
       filename = function() paste0("umap_plot_", Sys.Date(), ".png"),
       content = function(file) {
-        src <- file.path(DIRS$umap, paste0("umap_plot_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_umap_plot(), input$umap_export_width, input$umap_export_height)
+        ggplot2::ggsave(file, cached_umap_plot(), width = input$umap_export_width,
+                        height = input$umap_export_height, dpi = 150, bg = "white", device = "png")
       }
     )
     
     output$umap_download_pdf <- downloadHandler(
       filename = function() paste0("umap_plot_", Sys.Date(), ".pdf"),
       content = function(file) {
-        src <- file.path(DIRS$umap, paste0("umap_plot_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_umap_plot(), input$umap_export_width, input$umap_export_height)
+        ggplot2::ggsave(file, cached_umap_plot(), width = input$umap_export_width,
+                        height = input$umap_export_height, bg = "white", device = "pdf")
       }
     )
+    
+    output$umap_download_svg <- downloadHandler(
+      filename = function() paste0("umap_plot_", Sys.Date(), ".svg"),
+      content = function(file) {
+        req(cached_umap_plot(), input$umap_export_width, input$umap_export_height)
+        ggplot2::ggsave(file, cached_umap_plot(), width = input$umap_export_width,
+                        height = input$umap_export_height, bg = "white", device = svglite::svglite)
+      }
+    )
+    
     
     # --- HEATMAP PLOT LOGIC ---
     # Reactive trigger for analysis
@@ -606,11 +650,11 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     })
     
     # Create plot only when parameters OR data changes
-    cached_heatmap_ht <- reactive({
+    cached_heatmap_result <- reactive({
       req(heatmap_plot_params()$cc_data)
-      
+      notification_id <- showNotification("Rendering heatmap, please wait...", type = "message", duration = NULL)
       tryCatch({
-        ht <- plot_heatmap(
+        result <- plot_heatmap(
           cc_data        = heatmap_plot_params()$cc_data,
           rowK           = heatmap_plot_params()$row_k,
           colK           = heatmap_plot_params()$col_k,
@@ -618,36 +662,35 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           show_col_names = heatmap_plot_params()$show_col_names,
           out_dir        = DIRS$heatmap
         )
-        
-        ht  # Return the heatmap object
+        removeNotification(notification_id)
+        result
       }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering heatmap: ", error_msg))
-        )
+        shiny::validate(shiny::need(FALSE, paste0("Error rendering heatmap: ", e$message)))
         NULL
       })
-    }) %>% bindCache(heatmap_plot_params())  # Cache based on parameters
+    }) %>% bindCache(heatmap_plot_params())
     
-    # Store the new consensus cluster as metadata
-    observeEvent(cached_heatmap_ht(), {
-	  req(heatmap_cc_data(), input$heatmap_col_k)
-	  
-	  cc        <- heatmap_cc_data()$cc
-	  col_k     <- isolate(input$heatmap_col_k)
-	  col_class <- cc[[col_k]]$consensusClass 
-	  
-	  updated <- targets_merged()
-	  updated$consensus_cluster <- factor(
-		paste0("CC", col_class[match(rownames(updated), names(col_class))])
-	  )
-	  targets_merged(updated)
-	})
-		
-    # Plot output - just renders the cached plot
+    # Helper accessors
+    cached_heatmap_ht <- reactive({
+      req(cached_heatmap_result())
+      cached_heatmap_result()$ht
+    })
+    
+    # Store consensus cluster properly into targets_merged
+    observeEvent(cached_heatmap_result(), {
+      req(cached_heatmap_result(), input$heatmap_id_col)
+      col_class <- cached_heatmap_result()$col_class
+      updated <- targets_merged()
+      # Match by ID
+      updated$consensus_cluster <- factor(paste0("CC", col_class[updated[[input$heatmap_id_col]]]))
+      targets_merged(updated)
+      showNotification("Consensus clusters saved to samplesheet.", type = "message", duration = 3)
+    })
+    
+    # Plot output
     output$heatmap_plot <- renderPlot({
       req(cached_heatmap_ht())
-      
+      showNotification("Generating plot, please wait...", type = "message", duration = NULL, id = "ht_render")
       ComplexHeatmap::draw(
         cached_heatmap_ht(),
         merge_legends          = TRUE,
@@ -655,46 +698,83 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         annotation_legend_side = isolate(input$heatmap_annotation_legend_position),
         padding                = grid::unit(c(10, 10, 10, 10), "mm")
       )
+      removeNotification("ht_render")
     }, height = 750, width = 1000)
     
-    
-    
-    # Download handlers using cached plot
+    # Download handlers — notify user since redraw is needed for base graphics
     output$heatmap_download_png <- downloadHandler(
       filename = function() paste0("heatmap_", Sys.Date(), ".png"),
       content = function(file) {
-        src <- file.path(DIRS$heatmap, paste0("heatmap_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready"))
-        file.copy(src, file)
+        req(cached_heatmap_ht(), input$heatmap_export_width, input$heatmap_export_height)
+        showNotification("Generating PNG, please wait...", type = "message", duration = NULL, id = "ht_png")
+        w_px <- round(input$heatmap_export_width * 150)
+        h_px <- round(input$heatmap_export_height * 150)
+        png(file, width = w_px, height = h_px, res = 150)
+        ComplexHeatmap::draw(
+          cached_heatmap_ht(),
+          merge_legends          = TRUE,
+          heatmap_legend_side    = isolate(input$heatmap_legend_position),
+          annotation_legend_side = isolate(input$heatmap_annotation_legend_position),
+          padding                = grid::unit(c(10, 10, 10, 10), "mm")
+        )
+        dev.off()
+        removeNotification("ht_png")
       }
     )
     
     output$heatmap_download_pdf <- downloadHandler(
       filename = function() paste0("heatmap_", Sys.Date(), ".pdf"),
       content = function(file) {
-        src <- file.path(DIRS$heatmap, paste0("heatmap_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready"))
-        file.copy(src, file)
+        req(cached_heatmap_ht(), input$heatmap_export_width, input$heatmap_export_height)
+        showNotification("Generating PDF, please wait...", type = "message", duration = NULL, id = "ht_pdf")
+        pdf(file, width = input$heatmap_export_width, height = input$heatmap_export_height)
+        ComplexHeatmap::draw(
+          cached_heatmap_ht(),
+          merge_legends          = TRUE,
+          heatmap_legend_side    = isolate(input$heatmap_legend_position),
+          annotation_legend_side = isolate(input$heatmap_annotation_legend_position),
+          padding                = grid::unit(c(10, 10, 10, 10), "mm")
+        )
+        dev.off()
+        removeNotification("ht_pdf")
+      }
+    )
+    
+    output$heatmap_download_svg <- downloadHandler(
+      filename = function() paste0("heatmap_", Sys.Date(), ".svg"),
+      content = function(file) {
+        req(cached_heatmap_ht(), input$heatmap_export_width, input$heatmap_export_height)
+        showNotification("Generating SVG, please wait...", type = "message", duration = NULL, id = "ht_svg")
+        svglite::svglite(file, width = input$heatmap_export_width, height = input$heatmap_export_height)
+        ComplexHeatmap::draw(
+          cached_heatmap_ht(),
+          merge_legends          = TRUE,
+          heatmap_legend_side    = isolate(input$heatmap_legend_position),
+          annotation_legend_side = isolate(input$heatmap_annotation_legend_position),
+          padding                = grid::unit(c(10, 10, 10, 10), "mm")
+        )
+        dev.off()
+        removeNotification("ht_svg")
       }
     )
     
     # Download handler for consensus class TSV
-	output$heatmap_download_consensus <- downloadHandler(
-	  filename = function() {
-		paste0("ConsensusClass_k", input$heatmap_col_k, ".tsv")  # ✅
-	  },
-	  content = function(file) {
-		consensus_file <- file.path(
-		  DIRS$heatmap,
-		  paste0("ConsensusClass_k", input$heatmap_col_k, ".tsv")
-		)
-		validate(
-		  need(file.exists(consensus_file),
-			   paste0("Consensus class file not found. Please run analysis first."))
-		)
-		file.copy(consensus_file, file)
-	  }
-	)
+    output$heatmap_download_consensus <- downloadHandler(
+      filename = function() {
+        paste0("ConsensusClass_k", input$heatmap_col_k, ".tsv")  # ✅
+      },
+      content = function(file) {
+        consensus_file <- file.path(
+          DIRS$heatmap,
+          paste0("ConsensusClass_k", input$heatmap_col_k, ".tsv")
+        )
+        validate(
+          need(file.exists(consensus_file),
+               paste0("Consensus class file not found. Please run analysis first."))
+        )
+        file.copy(consensus_file, file)
+      }
+    )
     
     
     # --- GLOBAL METHYLATION LOGIC ---
@@ -789,8 +869,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           group1 = global_met_data()$group1,
           group2 = global_met_data()$group2,
           annot = global_met_data()$annot,
-          color_palette = global_met_data()$color_palette,
-          out_dir = global_met_data()$out_dir
+          color_palette = global_met_data()$color_palette
         )
         
         # Store the plot
@@ -814,21 +893,29 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     output$global_met_download_png <- downloadHandler(
       filename = function() paste0("global_methylation_plot_", Sys.Date(), ".png"),
       content = function(file) {
-        src <- file.path(DIRS$global_met, paste0("global_methylation_plot_", Sys.Date(), ".png"))
-        validate(need(file.exists(src), "PNG file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_global_met_plot(), input$global_met_export_width, input$global_met_export_height)
+        ggplot2::ggsave(file, cached_global_met_plot(), width = input$global_met_export_width,
+                        height = input$global_met_export_height, dpi = 150, bg = "white", device = "png")
       }
     )
     
     output$global_met_download_pdf <- downloadHandler(
       filename = function() paste0("global_methylation_plot_", Sys.Date(), ".pdf"),
       content = function(file) {
-        src <- file.path(DIRS$global_met, paste0("global_methylation_plot_", Sys.Date(), ".pdf"))
-        validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
-        file.copy(src, file)
+        req(cached_global_met_plot(), input$global_met_export_width, input$global_met_export_height)
+        ggplot2::ggsave(file, cached_global_met_plot(), width = input$global_met_export_width,
+                        height = input$global_met_export_height, bg = "white", device = "pdf")
       }
     )
     
+    output$global_met_download_svg <- downloadHandler(
+      filename = function() paste0("global_plot_", Sys.Date(), ".svg"),
+      content = function(file) {
+        req(cached_global_met_plot(), input$global_met_export_width, input$global_met_export_height)
+        ggplot2::ggsave(file, cached_global_met_plot(), width = input$global_met_export_width,
+                        height = input$global_met_export_height, bg = "white", device = svglite::svglite)
+      }
+    )
     
     # --- DIFFERENTIAL METHYLATION LOGIC ---
     # Use eventReactive directly
@@ -1611,12 +1698,39 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }
     )
     
+    # --- SAMPLESHEET LOGIC ---
+    targets_original <- reactiveVal(NULL)
+    
+    # Store original on first load
+    observe({
+      req(targets_merged())
+      if (is.null(targets_original())) {
+        targets_original(targets_merged())
+      }
+    })
+    
+    output$samplesheet_table <- DT::renderDataTable({
+      req(targets_merged())
+      df <- cbind(SampleID = rownames(targets_merged()), targets_merged())
+      make_dt(df, editable = TRUE)
+    })
+    
+    observeEvent(input$samplesheet_table_cell_edit, {
+      info <- input$samplesheet_table_cell_edit
+      updated <- targets_merged()
+      # col index from DT is 0-based; col 0 = SampleID (read-only), col 1 = first real col
+      real_col <- info$col  # because rownames=FALSE and SampleID is col 0, real cols start at 1
+      updated[info$row, real_col] <- DT::coerceValue(info$value, updated[info$row, real_col])
+      targets_merged(updated)
+    })
+    
     
     # --- HELPER FUNCTIONS ---
     update_active_button <- function(active_id) {
       shinyjs::removeClass(selector = ".content-section", class = "active")
-      all_buttons <- c("nav_beta_matrix", "nav_qc", "nav_mds", "nav_pca", 
-                       "nav_umap", "nav_heatmap", "nav_global", "nav_differential", "nav_cnv")
+      all_buttons <- c("nav_beta_matrix", "nav_qc", "nav_mds", "nav_pca",
+                       "nav_umap", "nav_heatmap", "nav_global", "nav_differential",
+                       "nav_cnv", "nav_samplesheet")
       
       for (btn in all_buttons) {
         if (btn == active_id) {
@@ -1630,9 +1744,9 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     }
     
     show_view <- function(view_id, title_text) {
-      all_views <- c("view_beta_matrix", "view_qc", "view_mds", "view_pca", 
-                     "view_umap", "view_heatmap", "view_global_met", 
-                     "view_differential", "view_cnv")
+      all_views <- c("view_beta_matrix", "view_qc", "view_mds", "view_pca",
+                     "view_umap", "view_heatmap", "view_global_met",
+                     "view_differential", "view_cnv", "view_samplesheet")
       
       for (view in all_views) { shinyjs::hide(view) }
       shinyjs::show(view_id)

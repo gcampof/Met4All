@@ -15,7 +15,8 @@ prepare_heatmap_cc <- function(
     cc_kmax,
     cc_reps,
     cc_pItem,
-    cc_seed
+    cc_seed,
+    out_dir
 ) {
   notification_id <- NULL
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
@@ -32,7 +33,7 @@ prepare_heatmap_cc <- function(
   top_cpgs <- min(top_cpgs, nrow(beta2))
   mat <- get_top_mad_probes(beta2, top_cpgs)
   
-  notification_id <- showNotification("Computing consensus clustering...", type="message", duration=3)
+  notification_id <- showNotification("Computing consensus clustering...", type="message")
   cc <- ConsensusClusterPlus::ConsensusClusterPlus(
     as.matrix(mat),
     maxK         = cc_kmax,
@@ -123,56 +124,20 @@ plot_heatmap <- function(
     sep = "\t", quote = FALSE, row.names = FALSE
   )
   
-  notification_id <- showNotification("Plotting...", type="message", duration=3)
   chtm <- ComplexHeatmap::Heatmap(
     mat,
     name = "Methylation",
     col  = viridis::viridis(100),
-    
     cluster_rows      = row_tree,
     row_split         = rowK,
     cluster_columns   = TRUE,
     column_split      = col_split,
     top_annotation    = top_anno,
-    
     show_row_names    = show_row_names,
     show_column_names = show_col_names,
     row_names_gp      = grid::gpar(fontsize = 6),
     column_names_gp   = grid::gpar(fontsize = 8)
   )
-  
-  tryCatch({
-    removeNotification(notification_id)
-    notification_id <- showNotification("Last steps...", type="message", duration=0)
-    png_file <- file.path(out_dir, paste0("heatmap_", Sys.Date(), ".png"))
-    pdf_file <- file.path(out_dir, paste0("heatmap_", Sys.Date(), ".pdf"))
-    
-    n_samples <- ncol(mat)
-    img_width <- max(2000, n_samples * 12)
-    
-    draw_args <- list(
-      chtm,
-      merge_legends           = TRUE,
-      heatmap_legend_side     = "right",
-      annotation_legend_side  = "right",
-      padding                 = grid::unit(c(10, 40, 10, 10), "mm"),  # extra right padding
-      legend_grouping         = "original"
-    )
-    
-    # PNG
-    png(png_file, width = img_width, height = 1400, res = 150)
-    do.call(ComplexHeatmap::draw, draw_args)
-    dev.off()
-    
-    # PDF
-    pdf(pdf_file, width = max(12, n_samples * 0.08), height = 9)
-    do.call(ComplexHeatmap::draw, draw_args)
-    dev.off()
-    
-  }, error = function(e) {
-    warning("Could not save heatmap: ", e$message)
-  })
-  
-  
-  chtm
+
+  list(ht = chtm, col_class = col_class)
 }

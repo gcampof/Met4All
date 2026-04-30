@@ -7,8 +7,7 @@ plot_global_methylation <- function(
     group1          = NULL,      
     group2          = NULL,   
     annot,
-    color_palette,
-    out_dir
+    color_palette
 ) {
   # Prepare inputs
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
@@ -69,10 +68,6 @@ plot_global_methylation <- function(
   beta_cgi    <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island == "Island", ]),]
   beta_shore  <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("N_Shore", "S_Shore"), ]),]
   beta_shelves <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("S_Shelf", "N_Shelf", "OpenSea"), ]),]
-  
-  message("[DEBUG] beta_cgi rows: ", nrow(beta_cgi))
-  message("[DEBUG] beta_shore rows: ", nrow(beta_shore))
-  message("[DEBUG] beta_shelves rows: ", nrow(beta_shelves))
   
   get_means <- function(mat, label) {
     data.frame(
@@ -152,17 +147,6 @@ plot_global_methylation <- function(
       # Remove grid
       panel.grid = ggplot2::element_blank()
     )
-  
-  # Save to disk with explicit dimensions
-  tryCatch({
-    png_file <- file.path(out_dir, paste0("global_methylation_plot_", Sys.Date(), ".png"))
-    ggplot2::ggsave(png_file, p, width = 12, height = 6, dpi = 150, bg = "white")
-    
-    pdf_file <- file.path(out_dir, paste0("global_methylation_plot_", Sys.Date(), ".pdf"))
-    ggplot2::ggsave(pdf_file, p, width = 12, height = 6, bg = "white")
-  }, error = function(e) {
-    warning("Could not save plots: ", e$message)
-  })
   
   return(p)
 }

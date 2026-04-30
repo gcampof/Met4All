@@ -25,7 +25,7 @@ prepare_mds_data <- function(beta, targets, id_col, top_cpgs) {
 }
 
 
-plot_mds <- function(mds_df, color_by, color_palette, out_dir) {
+plot_mds <- function(mds_df, color_by, color_palette) {
   validate(need(!is.null(mds_df), "No data available"))
   validate(need(color_by %in% colnames(mds_df), "Color column not found"))
   
@@ -45,17 +45,6 @@ plot_mds <- function(mds_df, color_by, color_palette, out_dir) {
       legend.text = ggplot2::element_text(size = 9),
       legend.position = "right"
     )
-  
-  # Save to disk
-  tryCatch({
-    png_file <- file.path(out_dir, paste0("mds_plot_", Sys.Date(), ".png"))
-    ggplot2::ggsave(png_file, p, width = 10, height = 6.5, dpi = 150, bg = "white")
-    
-    pdf_file <- file.path(out_dir, paste0("mds_plot_", Sys.Date(), ".pdf"))
-    ggplot2::ggsave(pdf_file, p, width = 10, height = 6.5, bg = "white")
-  }, error = function(e) {
-    warning("Could not save plots: ", e$message)
-  })
   
   return(p) 
 }

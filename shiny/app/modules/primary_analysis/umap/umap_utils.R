@@ -104,8 +104,7 @@ plot_umap <- function(
     n_neighbors,
     knn,
     consensus_k_max,
-    metric,
-    out_dir
+    metric
 ) {
   
   df <- data.frame(
@@ -176,17 +175,6 @@ plot_umap <- function(
         plot.subtitle = ggplot2::element_text(size = 11, color = "grey40")
       )
   }
-  
-  # Save to disk
-  tryCatch({
-    png_file <- file.path(out_dir, paste0("umap_plot_", Sys.Date(), ".png"))
-    ggplot2::ggsave(png_file, p, width = 10, height = 6.5, dpi = 150, bg = "white")
-    
-    pdf_file <- file.path(out_dir, paste0("umap_plot_", Sys.Date(), ".pdf"))
-    ggplot2::ggsave(pdf_file, p, width = 10, height = 6.5, bg = "white")
-  }, error = function(e) {
-    warning("Could not save plots: ", e$message)
-  })
   
   return(p)
 }

@@ -22,7 +22,7 @@ prepare_pca_data <- function(beta, targets, id_col, top_cpgs) {
 
 
 # Create PCA  plot
-plot_pca <- function(pca_df, color_by, dims, color_palette, out_dir) {
+plot_pca <- function(pca_df, color_by, dims, color_palette) {
   validate(need(!is.null(pca_df), "No data available"))
   validate(need(color_by %in% colnames(pca_df), "Color column not found"))
   
@@ -63,17 +63,6 @@ plot_pca <- function(pca_df, color_by, dims, color_palette, out_dir) {
       legend.text = ggplot2::element_text(size = 9),
       legend.position = "right"
     )
-  
-  # Save to disk
-  tryCatch({
-    png_file <- file.path(out_dir, paste0("pca_plot_", gsub(" ", "_", dims), "_", Sys.Date(), ".png"))
-    ggplot2::ggsave(png_file, p, width = 10, height = 6.5, dpi = 150, bg = "white")
-    
-    pdf_file <- file.path(out_dir, paste0("pca_plot_", gsub(" ", "_", dims), "_", Sys.Date(), ".pdf"))
-    ggplot2::ggsave(pdf_file, p, width = 10, height = 6.5, bg = "white")
-  }, error = function(e) {
-    warning("Could not save plots: ", e$message)
-  })
   
   return(p)
 }

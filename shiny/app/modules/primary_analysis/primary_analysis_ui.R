@@ -9,7 +9,7 @@ source("modules/primary_analysis/cnv/cnv_ui.R")
 # UI
 primary_analysis_ui <- function(id) {
   ns <- NS(id)
-
+  
   tagList(
     shinyjs::useShinyjs(),
     
@@ -159,7 +159,15 @@ primary_analysis_ui <- function(id) {
               disabled = TRUE
             )
           ),
-
+          shinyjs::hidden(
+            actionButton(
+              ns("nav_samplesheet"),
+              "Explore Samplesheet",
+              class = "btn btn-outline-primary w-100 text-start",
+              style = "justify-content: flex-start;"
+            )
+          ),
+          
           # Custom palette button input
           hr(style = "margin: 8px 0;"),
           fileInput(
@@ -281,6 +289,13 @@ primary_analysis_ui <- function(id) {
         shinyjs::hidden(
           div(id = ns("view_cnv"), class = "content-section",
               cnv_ui(ns)
+          )
+        ),
+        
+        # --- SAMPLESHEET VIEW ---
+        shinyjs::hidden(
+          div(id = ns("view_samplesheet"), class = "content-section",
+              samplesheet_ui(ns)
           )
         )
       )

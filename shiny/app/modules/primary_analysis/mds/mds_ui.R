@@ -30,9 +30,15 @@ mds_ui <- function(ns) {
           p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
             icon("download", style = "font-size: 0.75rem;"), " Export"),
           div(
-            class = "d-flex gap-2",
+            class = "d-flex gap-2 mb-2",
             downloadButton(ns("mds_download_png"), " PNG",class = "btn btn-sm btn-outline-secondary flex-grow-1"),
             downloadButton(ns("mds_download_pdf"), " PDF", class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+            downloadButton(ns("mds_download_svg"), " SVG", class = "btn btn-sm btn-outline-secondary flex-grow-1")
+          ),
+          div(
+            class = "d-flex gap-2",
+            numericInput(ns("mds_export_width"), "Width (in):", value = 10, min = 1, max = 40, step = 0.5),
+            numericInput(ns("mds_export_height"), "Height (in):", value = 6.5, min = 1, max = 40, step = 0.5)
           )
         )
       ),
@@ -46,7 +52,7 @@ mds_ui <- function(ns) {
           style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
           p(class = "text-uppercase fw-bold mb-2 mt-1", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
             icon("calculator", style = "font-size: 0.75rem;"), " MDS Parameters"),
-          sliderInput(ns("mds_top_cpgs"), "Top CpGs (MAD):", min = 1000, max = 30000, value = 10000, step = 1000)
+          sliderInput(ns("mds_top_cpgs"), "Top CpGs (MAD):", min = 1000, max = 20000, value = 10000, step = 1000)
         ),
         
         div(

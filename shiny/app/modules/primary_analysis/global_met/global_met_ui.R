@@ -31,11 +31,19 @@ global_met_ui <- function(ns) {
           p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
             icon("download", style = "font-size: 0.75rem;"), " Export"),
           div(
-            class = "d-flex gap-2",
+            class = "d-flex gap-2 mb-2",
             downloadButton(ns("global_met_download_png"), " PNG",
                            class = "btn btn-sm btn-outline-secondary flex-grow-1"),
             downloadButton(ns("global_met_download_pdf"), " PDF",
+                           class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+            downloadButton(ns("global_met_download_svg"), " SVG",
                            class = "btn btn-sm btn-outline-secondary flex-grow-1")
+            
+          ),
+          div(
+            class = "d-flex gap-2",
+            numericInput(ns("global_met_export_width"), "Width (in):", value = 10, min = 1, max = 40, step = 0.5),
+            numericInput(ns("global_met_export_height"), "Height (in):", value = 6.5, min = 1, max = 40, step = 0.5)
           )
         )
       ),

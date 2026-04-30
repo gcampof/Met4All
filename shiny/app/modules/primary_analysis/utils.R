@@ -76,42 +76,46 @@ update_all_palettes <- function(session, PALETTES) {
 }
 
 # Shared DT config
-make_dt <- function(df, container_width = "100%") {
+make_dt <- function(df, editable = FALSE, container_width = "100%") {
+  
+  edit_config <- if (isTRUE(editable)) {
+    list(target = "cell", disable = list(columns = 0L))
+  } else {
+    FALSE
+  }
+  
   DT::datatable(
     df,
+    editable   = edit_config,
     filter     = "top", 
     rownames   = FALSE,
     options    = list(
-      scrollY    = "450px",
-      scrollX    = TRUE,
+      scrollY        = "450px",
+      scrollX        = TRUE,
       scrollCollapse = TRUE,
-      deferRender = TRUE,
-      pageLength = 500,
-      lengthMenu = c(50, 100, 250, 500),
-      
-      autoWidth  = FALSE,
-      
-      columnDefs = list(
+      deferRender    = TRUE,
+      pageLength     = 500,
+      lengthMenu     = c(50, 100, 250, 500),
+      autoWidth      = FALSE,
+      columnDefs     = list(
         list(targets = "_all", className = "dt-right"),
         list(targets = "_all", width = "150px")
       ),
-      
-      searching = FALSE,
+      searching  = FALSE,
       pagingType = "simple_numbers"
     ),
-    class = "display compact hover stripe",
-    style = "bootstrap4",
+    class      = "display compact hover stripe",
+    style      = "bootstrap4",
     extensions = c("Buttons", "KeyTable", "Scroller"),
-    
-    callback = JS("
+    callback   = JS("
       table.style.width = '100%';
       table.style.tableLayout = 'fixed';
     ")
   ) |>
     DT::formatStyle(
-      columns = names(df),
+      columns     = names(df),
       `white-space` = "normal",
-      `word-break` = "break-word",
-      `max-width` = "150px"
+      `word-break`  = "break-word",
+      `max-width`   = "150px"
     )
 }
