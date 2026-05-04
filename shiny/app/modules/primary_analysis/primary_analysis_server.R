@@ -528,6 +528,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # Run analysis when button is clicked
     observeEvent(input$umap_run_analysis, {
+      umap_mode("training")
+      predicted_umap_df(NULL)
       umap_analysis_trigger(umap_analysis_trigger() + 1)
     })
     
@@ -590,6 +592,19 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # umap mode flag
     umap_mode <- reactiveVal("training")
     
+    # Sync color_by choices to match whichever df is currently active
+    observe({
+      if (umap_mode() == "training") {
+        req(umap_data())
+        exclude_cols <- c("Sample", "UMAP1", "UMAP2")
+        color_cols <- setdiff(colnames(umap_data()), exclude_cols)
+        current <- isolate(input$umap_color_by)
+        updateSelectInput(session, "umap_color_by",
+                          choices = color_cols,
+                          selected = if (current %in% color_cols) current else color_cols[1])
+      }
+    })
+    
     # Run prediction when button is clicked
     observeEvent(input$umap_run_predict, {
       
@@ -615,7 +630,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         }
 
         beta_new <- beta_merged()[, new_sample_ids, drop = FALSE]
-
         df <- predict_umap(beta = beta_new, umap_model = cached_umap_model())
 
         predicted_umap_df(df)
