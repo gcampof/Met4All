@@ -605,11 +605,19 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       showNotification("Running UMAP projection...", type = "message", duration = 3)
       
       tryCatch({
-        df <- predict_umap(
-          beta       = beta_merged(),
-          umap_model = cached_umap_model()
-        )
-        
+        # Use only the samples that were not present in the original model
+        new_sample_ids <- setdiff(colnames(beta_merged()), rownames(cached_umap_model()$layout))
+
+        if (length(new_sample_ids) == 0) {
+          showNotification("No new samples found, all samples already exist in the model.",
+                           type = "warning", duration = 5)
+          return()
+        }
+
+        beta_new <- beta_merged()[, new_sample_ids, drop = FALSE]
+
+        df <- predict_umap(beta = beta_new, umap_model = cached_umap_model())
+
         predicted_umap_df(df)
         umap_mode("predicted")
         
