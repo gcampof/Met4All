@@ -1,0 +1,62 @@
+Sample_Name,Sample_ID,Sentrix_ID,Sentrix_Position,Slide,Array,Tissue,Cluster,Heritability,Gender,Diagnosis,Laterality,Age at diagnosis,RB1 status in tumor,MYCN status
+INF_R_1024,GSM8258517,200882160026,R04C01,200882160026,R04C01,,Cluster A,heritable,m,relapse,bilateral,< 6 months,RB1-/-,no MYCN amplification
+INF_R_1673,GSM8258520,203949840149,R08C01,203949840149,R08C01,,Cluster B,non heritable,m,relapse,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_10,GSM8258459,200889820015,R02C01,200889820015,R02C01,"retinoblastoma tumor, primary",Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1 mutation not detected,no MYCN amplification
+RB_11,GSM8258460,200889820015,R01C01,200889820015,R01C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1 mutation not detected,no MYCN amplification
+RB_12,GSM8258461,200889820009,R08C01,200889820009,R08C01,,Cluster C,non heritable,m,first diagnosis,unilateral,< 6 months,RB1 wt,MYCN amplification
+RB_13,GSM8258462,200882160026,R02C01,200882160026,R02C01,,Cluster A,non heritable,m,first diagnosis,unilateral,> 2 years,"potential retina contamination,  RB1 wt",no MYCN amplification
+RB_14,GSM8258463,200889820009,R07C01,200889820009,R07C01,,Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1 not detected (wt?),no MYCN amplification
+RB_15,GSM8258464,200882160026,R01C01,200882160026,R01C01,,Cluster C,non heritable,m,first diagnosis,unilateral,< 6 months,RB1 wt,MYCN amplification
+RB_16,GSM8258465,200882160023,R08C01,200882160023,R08C01,,Cluster C,non heritable,m,first diagnosis,unilateral,< 6 months,RB1 wt,MYCN amplification
+RB_17,GSM8258466,200889820009,R06C01,200889820009,R06C01,,Cluster C,non heritable,f,first diagnosis,unilateral,>1 -2 years,RB1 wt,MYCN amplification
+RB_18,GSM8258467,200882160073,R05C01,200882160073,R05C01,,Cluster C,non heritable,m,first diagnosis,unilateral,< 6 months,RB1 wt,MYCN amplification
+RB_19,GSM8258468,200889820009,R05C01,200889820009,R05C01,,Cluster C,non heritable,f,first diagnosis,unilateral,< 6 months,RB1 wt,MYCN amplification
+RB_20,GSM8258469,9878827214,R03C01,9878827214,R03C01,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,bilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_21,GSM8258470,9878827214,R02C01,9878827214,R02C01,"retinoblastoma tumor, primary",Cluster B,heritable,m,first diagnosis,bilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_22,GSM8258471,9980102125,R03C02,9980102125,R03C02,"retinoblastoma tumor, primary",Cluster A,heritable,m,first diagnosis,bilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_23,GSM8258472,9980102125,R02C02,9980102125,R02C02,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,bilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_24,GSM8258473,9980102125,R01C02,9980102125,R01C02,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,bilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_25,GSM8258474,200889820009,R04C01,200889820009,R04C01,,Cluster B,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_26,GSM8258475,10006823005,R05C01,10006823005,R05C01,"retinoblastoma tumor, primary",Cluster A,heritable,m,first diagnosis,bilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_27,GSM8258476,200882160023,R07C01,200882160023,R07C01,,Cluster B,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_28,GSM8258477,10006823005,R04C01,10006823005,R04C01,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_29,GSM8258478,200882160023,R06C01,200882160023,R06C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_3,GSM8258479,201194010165,R01C01,201194010165,R01C01,,Cluster A,heritable,f,first diagnosis,bilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_30,GSM8258480,200889820009,R03C01,200889820009,R03C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_31,GSM8258481,200889820009,R02C01,200889820009,R02C01,,Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_32,GSM8258482,200889820009,R01C01,200889820009,R01C01,,Cluster B,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_33,GSM8258483,9980102125,R06C01,9980102125,R06C01,"retinoblastoma tumor, primary",Cluster A,heritable,m,first diagnosis,unilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_34,GSM8258484,200882160096,R08C01,200882160096,R08C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_35,GSM8258485,10006823005,R03C01,10006823005,R03C01,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_36,GSM8258486,200882160096,R07C01,200882160096,R07C01,,Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_37,GSM8258487,200882160096,R06C01,200882160096,R06C01,,Cluster C,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,MYCN amplification
+RB_38,GSM8258488,200882160096,R05C01,200882160096,R05C01,,Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_39,GSM8258489,200882160096,R04C01,200882160096,R04C01,,Cluster A,non heritable,f,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_4,GSM8258490,201194010164,R08C01,201194010164,R08C01,,Cluster B,non heritable,m,first diagnosis,bilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_40,GSM8258491,200882160096,R03C01,200882160096,R03C01,,Cluster A,non heritable,m,first diagnosis,unilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_41,GSM8258492,10006823005,R02C01,10006823005,R02C01,"retinoblastoma tumor, primary",Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_42,GSM8258493,10006823005,R01C01,10006823005,R01C01,"retinoblastoma tumor, primary",Cluster A,non heritable,f,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_43,GSM8258494,9878827214,R06C02,9878827214,R06C02,"retinoblastoma tumor, primary",Cluster A,heritable,f,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_44,GSM8258495,9878827214,R05C02,9878827214,R05C02,"retinoblastoma tumor, primary",Cluster A,non heritable,f,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_45,GSM8258496,9878827214,R04C02,9878827214,R04C02,"retinoblastoma tumor, primary",Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_46,GSM8258497,9878827214,R03C02,9878827214,R03C02,"retinoblastoma tumor, primary",Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_47,GSM8258498,9878827214,R02C02,9878827214,R02C02,"retinoblastoma tumor, primary",Cluster A,non heritable,f,first diagnosis,unilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_48,GSM8258499,9878827214,R01C02,9878827214,R01C02,"retinoblastoma tumor, primary",Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_49,GSM8258500,9878827214,R06C01,9878827214,R06C01,"retinoblastoma tumor, primary",Cluster A,non heritable,f,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_5,GSM8258501,201194010164,R07C01,201194010164,R07C01,,Cluster A,non heritable,f,first diagnosis,unilateral,< 6 months,RB1-/-,no MYCN amplification
+RB_50,GSM8258502,200882160096,R01C01,200882160096,R01C01,,Cluster B,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_51,GSM8258503,9878827214,R05C01,9878827214,R05C01,"retinoblastoma tumor, primary",Cluster B,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_52,GSM8258504,9878827214,R04C01,9878827214,R04C01,"retinoblastoma tumor, primary",Cluster C,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_53,GSM8258505,200882160094,R08C01,200882160094,R08C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_54,GSM8258506,200882160073,R04C01,200882160073,R04C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_55,GSM8258507,200882160094,R07C01,200882160094,R07C01,,Cluster C,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,MYCN amplification
+RB_56,GSM8258508,200882160094,R06C01,200882160094,R06C01,,Cluster B,non heritable,m,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_57,GSM8258509,200882160094,R05C01,200882160094,R05C01,,Cluster B,non heritable,f,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_58,GSM8258510,200882160094,R04C01,200882160094,R04C01,,Cluster B,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_59,GSM8258511,200882160023,R04C01,200882160023,R04C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_6,GSM8258512,201194010164,R06C01,201194010164,R06C01,,Cluster A,non heritable,f,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_60,GSM8258513,200882160023,R03C01,200882160023,R03C01,,Cluster B,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_61,GSM8258514,200882160023,R02C01,200882160023,R02C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>6 months- 1 year,RB1-/-,no MYCN amplification
+RB_7,GSM8258515,201194010164,R05C01,201194010164,R05C01,,Cluster A,non heritable,m,first diagnosis,unilateral,>1 -2 years,RB1-/-,no MYCN amplification
+RB_8,GSM8258516,201194010164,R04C01,201194010164,R04C01,,Cluster C,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
+RB_8,GSM8258517,200882160026,R04C01,200882160026,R04C01,,Cluster A,non heritable,f,first diagnosis,unilateral,> 2 years,RB1-/-,no MYCN amplification
