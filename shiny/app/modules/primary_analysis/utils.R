@@ -119,3 +119,74 @@ make_dt <- function(df, editable = FALSE, container_width = "100%") {
       `max-width`   = "150px"
     )
 }
+
+# Read an uploaded samplesheet (.csv/.xlsx) as a plain data.frame
+read_samplesheet_file <- function(path, name) {
+  df <- if (grepl("\\.xlsx?$", name, ignore.case = TRUE)) {
+    readxl::read_excel(path)
+  } else {
+    readr::read_csv(path, show_col_types = FALSE)
+  }
+  df <- as.data.frame(df, stringsAsFactors = FALSE)
+  colnames(df) <- make.names(colnames(df), unique = TRUE)
+  df
+}
+
+
+# Shared columns whose values overlap, best match first — usable as merge keys
+samplesheet_key_candidates <- function(targets, new_ss) {
+  shared <- intersect(colnames(targets), colnames(new_ss))
+  if (length(shared) == 0) return(character(0))
+
+  n_match <- vapply(shared, function(col) {
+    length(intersect(trimws(as.character(targets[[col]])),
+                     trimws(as.character(new_ss[[col]]))))
+  }, integer(1))
+
+  shared <- shared[n_match > 0]
+  shared[order(n_match[n_match > 0], decreasing = TRUE)]
+}
+
+
+# Row indices of new_ss aligned to targets, NA where a sample has no match
+match_samplesheet_rows <- function(targets, new_ss, key_col) {
+  match(trimws(as.character(targets[[key_col]])),
+        trimws(as.character(new_ss[[key_col]])))
+}
+
+
+# Add columns from an uploaded samplesheet, matching rows by key_col.
+# Row order and rownames of targets are preserved so existing analyses keep working.
+merge_samplesheet_columns <- function(targets, new_ss, key_col, overwrite = FALSE) {
+  if (!key_col %in% colnames(targets) || !key_col %in% colnames(new_ss)) {
+    stop("Match column '", key_col, "' must exist in both samplesheets.")
+  }
+
+  idx <- match_samplesheet_rows(targets, new_ss, key_col)
+  matched <- !is.na(idx)
+  if (!any(matched)) stop("No samples matched using column '", key_col, "'.")
+
+  added <- character(0); updated <- character(0); skipped <- character(0)
+
+  for (col in setdiff(colnames(new_ss), key_col)) {
+    vals <- new_ss[[col]][idx]
+
+    if (!col %in% colnames(targets)) {
+      targets[[col]] <- vals
+      added <- c(added, col)
+    } else if (overwrite) {
+      # Coerce to character when types differ, and leave unmatched rows untouched
+      if (!identical(class(targets[[col]]), class(vals))) {
+        targets[[col]] <- as.character(targets[[col]])
+        vals <- as.character(vals)
+      }
+      targets[[col]][matched] <- vals[matched]
+      updated <- c(updated, col)
+    } else {
+      skipped <- c(skipped, col)
+    }
+  }
+
+  list(targets = targets, n_matched = sum(matched), n_total = nrow(targets),
+       added = added, updated = updated, skipped = skipped)
+}

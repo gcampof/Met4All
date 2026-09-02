@@ -159,13 +159,11 @@ primary_analysis_ui <- function(id) {
               disabled = TRUE
             )
           ),
-          shinyjs::hidden(
-            actionButton(
-              ns("nav_samplesheet"),
-              "Explore Samplesheet",
-              class = "btn btn-outline-primary w-100 text-start",
-              style = "justify-content: flex-start;"
-            )
+          actionButton(
+            ns("nav_samplesheet"),
+            "Explore Samplesheet",
+            class = "btn btn-outline-primary w-100 text-start",
+            style = "justify-content: flex-start;"
           ),
           
           # Custom palette button input

@@ -50,3 +50,6 @@ rsconnect/
 
 shiny/logs/*
 !shiny/logs/.gitkeep
+
+shiny/app/cache/*
+shiny/app/data/*

@@ -79,30 +79,31 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       update_all_palettes(session, PALETTES())
     })
     
-    # Initialize metadata choices
+    # Initialize metadata choices — re-runs whenever the samplesheet gains columns,
+    # so the current selection is kept when it is still a valid column
     observe({
       req(length(names(input)) > 0)
       req(targets_merged())
       meta_cols <- colnames(targets_merged())
       
-      updateSelectInput(session, "pca_color_by", choices = meta_cols, selected = meta_cols[1])
-      updateSelectInput(session, "mds_color_by", choices = meta_cols, selected = meta_cols[1])
-      updateSelectInput(session, "heatmap_annotation_cols", choices = meta_cols, selected = meta_cols[1])
+      update_meta_cols <- function(input_ids, default) {
+        for (input_id in input_ids) {
+          current <- isolate(input[[input_id]])
+          updateSelectInput(session, input_id, choices = meta_cols,
+                            selected = if (isTRUE(current %in% meta_cols)) current else default)
+        }
+      }
+      
+      update_meta_cols(c("pca_color_by", "mds_color_by", "heatmap_annotation_cols"), meta_cols[1])
       
       # Initializa sample ID choices dinamically (default "ID")
       default_id <- if ("ID" %in% meta_cols) "ID" else meta_cols[1]
-      updateSelectInput(session, "mds_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "pca_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "umap_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "heatmap_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "global_met_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "diff_met_id_col", choices = meta_cols, selected = default_id)
-      updateSelectInput(session, "cnv_id_col", choices = meta_cols, selected = default_id)
+      update_meta_cols(c("mds_id_col", "pca_id_col", "umap_id_col", "heatmap_id_col",
+                         "global_met_id_col", "diff_met_id_col", "cnv_id_col"), default_id)
       
       # Initialize comparison ID choices dinamically (default Sample_Group)
       default_group <- if ("Sample_Group" %in% meta_cols) "Sample_Group" else meta_cols[1]
-      updateSelectInput(session, "global_met_comparison_col", choices = meta_cols, selected = default_group)
-      updateSelectInput(session, "diff_met_comparison_col", choices = meta_cols, selected = default_group)
+      update_meta_cols(c("global_met_comparison_col", "diff_met_comparison_col"), default_group)
       
       # Initialize array type choices dinamically for CNV
       if(!is.null(array_names())){
@@ -748,7 +749,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     heatmap_cc_data <- eventReactive(input$heatmap_run_analysis, {
       req(
         beta_merged(), targets_merged(),
-        input$heatmap_top, input$heatmap_id_col,
+        input$heatmap_id_col,
         input$heatmap_cc_kmax, input$heatmap_cc_reps,
         input$heatmap_cc_pItem, input$heatmap_cc_seed,
         input$heatmap_color_palette
@@ -1864,6 +1865,87 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       real_col <- info$col  # because rownames=FALSE and SampleID is col 0, real cols start at 1
       updated[info$row, real_col] <- DT::coerceValue(info$value, updated[info$row, real_col])
       targets_merged(updated)
+    })
+    
+    # --- ADD METADATA FROM A NEW SAMPLESHEET ---
+    # Uploaded sheet is held here until the user applies it
+    new_samplesheet <- reactiveVal(NULL)
+    
+    observeEvent(input$samplesheet_upload, {
+      req(input$samplesheet_upload, targets_merged())
+      
+      tryCatch({
+        df <- read_samplesheet_file(input$samplesheet_upload$datapath,
+                                    input$samplesheet_upload$name)
+        keys <- samplesheet_key_candidates(targets_merged(), df)
+        
+        if (length(keys) == 0) {
+          new_samplesheet(NULL)
+          showNotification(
+            paste0("No usable match column found. The uploaded samplesheet needs a column with the ",
+                   "same name and matching values as one in the current samplesheet ",
+                   "(e.g. Sample_Name or ID)."),
+            type = "error", duration = 10
+          )
+          return()
+        }
+        
+        new_samplesheet(df)
+        updateSelectInput(session, "samplesheet_key_col", choices = keys, selected = keys[1])
+      }, error = function(e) {
+        new_samplesheet(NULL)
+        showNotification(paste("Could not read samplesheet:", e$message), type = "error", duration = 8)
+      })
+    })
+    
+    # Preview what applying the upload would do
+    output$samplesheet_upload_status <- renderUI({
+      req(new_samplesheet(), targets_merged(), input$samplesheet_key_col)
+      df <- new_samplesheet()
+      req(input$samplesheet_key_col %in% colnames(df))
+      
+      n_matched <- sum(!is.na(match_samplesheet_rows(targets_merged(), df, input$samplesheet_key_col)))
+      new_cols  <- setdiff(colnames(df), colnames(targets_merged()))
+      
+      div(
+        class = "small",
+        span(class = if (n_matched == nrow(targets_merged())) "text-success" else "text-warning",
+             sprintf("%d of %d samples matched. ", n_matched, nrow(targets_merged()))),
+        span(class = "text-muted",
+             if (length(new_cols) > 0) paste("New columns:", paste(new_cols, collapse = ", "))
+             else "No new columns — tick 'Overwrite existing columns' to update the ones already present.")
+      )
+    })
+    
+    observeEvent(input$samplesheet_apply, {
+      req(new_samplesheet(), targets_merged(), input$samplesheet_key_col)
+      
+      tryCatch({
+        res <- merge_samplesheet_columns(
+          targets   = targets_merged(),
+          new_ss    = new_samplesheet(),
+          key_col   = input$samplesheet_key_col,
+          overwrite = isTRUE(input$samplesheet_overwrite)
+        )
+        
+        if (length(res$added) == 0 && length(res$updated) == 0) {
+          showNotification(
+            "Nothing to add — all columns already exist. Tick 'Overwrite existing columns' to update them.",
+            type = "warning", duration = 8
+          )
+          return()
+        }
+        
+        targets_merged(res$targets)
+        
+        msg <- sprintf("%d/%d samples matched.", res$n_matched, res$n_total)
+        if (length(res$added) > 0)   msg <- paste0(msg, " Added: ", paste(res$added, collapse = ", "), ".")
+        if (length(res$updated) > 0) msg <- paste0(msg, " Updated: ", paste(res$updated, collapse = ", "), ".")
+        if (length(res$skipped) > 0) msg <- paste0(msg, " Kept existing: ", paste(res$skipped, collapse = ", "), ".")
+        showNotification(msg, type = "message", duration = 10)
+      }, error = function(e) {
+        showNotification(paste("Could not add metadata:", e$message), type = "error", duration = 8)
+      })
     })
     
     
