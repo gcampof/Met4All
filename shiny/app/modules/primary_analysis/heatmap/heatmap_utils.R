@@ -24,8 +24,8 @@ prepare_heatmap_cc <- function(
   targets2 <- align_res$targets2
 
   shiny::validate(
-    shiny::need(top_cpgs >= 10,
-                paste0("Too few CpGs selected (", top_cpgs, "). Please select at least 10.")),
+    shiny::need(isTRUE(top_cpgs >= 10 && top_cpgs <= 10000),
+                "Top CpGs must be a number between 10 and 10000."),
     shiny::need(cc_kmax >= 2,
                 "CC Max K must be at least 2.")
   )
