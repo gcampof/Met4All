@@ -123,7 +123,7 @@ ls ./shiny/logs/
 cat ./shiny/logs/<logfile>.log
 
 # Or check the container logs directly
-docker logs Met4All
+docker logs m4a-shiny
 ```
 
 ---
@@ -132,16 +132,19 @@ docker logs Met4All
 
 ```
 .
-├── docker-compose.yml
+├── docker-compose.dev.yml
 ├── docker-compose.prod.yml
-├── .dockerignore
 ├── rstudio/
 │   └── Dockerfile
 └── shiny/
     ├── Dockerfile
     ├── shiny-server.conf
     └── app/
-        └── app.R
+        ├── app.R
+        ├── config.yml
+        ├── common_files/
+        ├── modules/
+        └── www/
 ```
 
 ---
@@ -159,23 +162,28 @@ The section below is intended for users who want to modify or extend Met4All.
 
 ### Building from Source
 
-To build both the Shiny and RStudio images locally (first build takes ~20–40 min):
+First, create the directories the app writes to (if not created previously):
 
 ```bash
-docker compose build
-docker compose up -d
+mkdir -p ./shiny/logs ./shiny/app/data ./shiny/app/cache && chmod 777 ./shiny/logs ./shiny/app/data ./shiny/app/cache
+```
+
+To build both the Shiny and RStudio images locally and start them (first build takes ~20–40 min, as it installs the full Bioconductor stack):
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
 ```
 
 To rebuild only the Shiny service after changes:
 
 ```bash
-docker compose build shiny && docker compose up -d shiny
+docker compose -f docker-compose.dev.yml up -d --build shiny
 ```
 
 To stop:
 
 ```bash
-docker compose down
+docker compose -f docker-compose.dev.yml down
 ```
 
 ### Accessing the Services
@@ -189,10 +197,10 @@ docker compose down
 
 ```bash
 # Shiny only
-docker compose up -d shiny
+docker compose -f docker-compose.dev.yml up -d --build shiny
 
 # RStudio only
-docker compose up -d rstudio
+docker compose -f docker-compose.dev.yml up -d --build rstudio
 ```
 
 ### Publishing a New Image to DockerHub
@@ -212,9 +220,9 @@ Then update the image tag in `docker-compose.prod.yml` and commit.
 
 ### Development Notes
 
-- The dev `docker-compose.yml` mounts `./shiny/app` into the container, so you can edit `app.R` locally and pick up changes with `docker compose restart shiny` — no rebuild needed.
+- `docker-compose.dev.yml` mounts `./shiny/app` over `/srv/shiny-server` in the container, so the running app uses the code in your working tree rather than the copy baked into the image. Edit `app.R` locally and pick up changes with `docker compose -f docker-compose.dev.yml restart shiny` — no rebuild needed.
 - The production `docker-compose.prod.yml` pulls from DockerHub and does **not** mount the app code. Only `logs/`, `data/`, and `cache/` are bind-mounted for persistence.
-- To use the production image for Shiny but run RStudio locally: `docker compose -f docker-compose.prod.yml up -d shiny` and `docker compose up -d rstudio`.
+- To use the production image for Shiny but run RStudio locally: `docker compose -f docker-compose.prod.yml up -d shiny` and `docker compose -f docker-compose.dev.yml up -d rstudio`.
 
 ### Dependencies
 
