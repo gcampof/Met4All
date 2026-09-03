@@ -433,6 +433,9 @@ load_data_server <- function(id, DIRS, cfg) {
       shinyjs::show("ld_loading_view")
       
       tryCatch({
+        # Fail fast on a full volume rather than part-way through a long run.
+        m4a_check_disk(DIRS$data, upload_bytes = sum(input$zipfile$size))
+
         notification_id <- showNotification("Extracting files from zip...", type="message", duration=0)
         zip_paths <- input$zipfile$datapath
         # archive_extract takes one archive at a time, but the fileInput allows

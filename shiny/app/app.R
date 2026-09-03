@@ -41,6 +41,10 @@ options(shiny.maxRequestSize = 10 * 1024^3)
 # Stop data.table/BLAS/BiocParallel from each sizing themselves to the whole host.
 m4a_apply_thread_caps()
 
+# The worker pool starts lazily on the first heavy analysis; make sure it does
+# not outlive the app.
+onStop(function() m4a_stop_workers())
+
 # JavaScript reset code
 jsResetCode <- "shinyjs.resetPage = function() {history.go(0)}"
 
