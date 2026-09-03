@@ -64,8 +64,8 @@ cd Met4All
 ### Step 2 - Prepare data directories
 
 ```bash
-mkdir -p ./shiny/logs ./shiny/app/data ./shiny/app/cache
-chmod 777 ./shiny/logs ./shiny/app/data ./shiny/app/cache
+mkdir -p ./shiny/logs ./shiny/app/data
+chmod 777 ./shiny/logs ./shiny/app/data
 ```
 
 > These directories are where the app writes logs, user uploads, and analysis results. The app code itself is bundled inside the Docker image and does not need to be present on your machine.
@@ -165,7 +165,7 @@ The section below is intended for users who want to modify or extend Met4All.
 First, create the directories the app writes to (if not created previously):
 
 ```bash
-mkdir -p ./shiny/logs ./shiny/app/data ./shiny/app/cache && chmod 777 ./shiny/logs ./shiny/app/data ./shiny/app/cache
+mkdir -p ./shiny/logs ./shiny/app/data && chmod 777 ./shiny/logs ./shiny/app/data
 ```
 
 To build both the Shiny and RStudio images locally and start them (first build takes ~20–40 min, as it installs the full Bioconductor stack):
@@ -221,7 +221,8 @@ Then update the image tag in `docker-compose.prod.yml` and commit.
 ### Development Notes
 
 - `docker-compose.dev.yml` mounts `./shiny/app` over `/srv/shiny-server` in the container, so the running app uses the code in your working tree rather than the copy baked into the image. Edit `app.R` locally and pick up changes with `docker compose -f docker-compose.dev.yml restart shiny` — no rebuild needed.
-- The production `docker-compose.prod.yml` pulls from DockerHub and does **not** mount the app code. Only `logs/`, `data/`, and `cache/` are bind-mounted for persistence.
+- The production `docker-compose.prod.yml` pulls from DockerHub and does **not** mount the app code. Only `logs/` and `data/` are bind-mounted for persistence.
+- The annotation cache is precomputed at image build time and baked in at `/opt/met4all/cache`. Override the location with the `M4A_CACHE_DIR` environment variable, when it is unset (the RStudio container) the app falls back to a local `cache/` directory. Installs that predate this can `rm -rf ./shiny/app/cache`.
 - To use the production image for Shiny but run RStudio locally: `docker compose -f docker-compose.prod.yml up -d shiny` and `docker compose -f docker-compose.dev.yml up -d rstudio`.
 
 ### Dependencies

@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install CRAN packages via pak for speed
 RUN R -e 'install.packages("pak", repos = "https://r-lib.github.io/p/pak/dev/")'
-RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
+RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "here", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
 
 # Install BiocManager first
 RUN R -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org")'
@@ -42,6 +42,21 @@ RUN R -e 'devtools::install_github("hovestadtlab/conumee2", subdir = "conumee2",
 # Create ExperimentHub cache dir owned by shiny user
 RUN mkdir -p /home/shiny/.cache/R/ExperimentHub && \
     chown -R shiny:shiny /home/shiny/.cache
+
+# Bake the annotation cache outside every bind mount.
+# Narrow COPY so this layer is not invalidated by ordinary app edits.
+COPY app/config.yml                              /opt/met4all/build/config.yml
+COPY app/modules/common/utils.R                  /opt/met4all/build/utils.R
+COPY app/modules/primary_analysis/annotations.R  /opt/met4all/build/annotations.R
+COPY app/common_files/pathways/                  /opt/met4all/build/pathways/
+COPY build_cache.R                               /opt/met4all/build/build_cache.R
+
+RUN mkdir -p /opt/met4all/cache && \
+    Rscript /opt/met4all/build/build_cache.R && \
+    chown -R shiny:shiny /opt/met4all && \
+    ls -lh /opt/met4all/cache
+
+ENV M4A_CACHE_DIR=/opt/met4all/cache
 
 # Create runtime directionres with correct ownership
 RUN mkdir -p /srv/shiny-server/data /srv/shiny-server/cache && \

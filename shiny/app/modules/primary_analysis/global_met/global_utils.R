@@ -65,9 +65,9 @@ plot_global_methylation <- function(
   
   # Annotation subsets
   beta_all    <- beta2
-  beta_cgi    <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island == "Island", ]),]
-  beta_shore  <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("N_Shore", "S_Shore"), ]),]
-  beta_shelves <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("S_Shelf", "N_Shelf", "OpenSea"), ]),]
+  beta_cgi    <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island == "Island", , drop = FALSE]),]
+  beta_shore  <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("N_Shore", "S_Shore"), , drop = FALSE]),]
+  beta_shelves <- beta2[rownames(beta2) %in% rownames(annot[annot$Relation_to_Island %in% c("S_Shelf", "N_Shelf", "OpenSea"), , drop = FALSE]),]
   
   get_means <- function(mat, label) {
     data.frame(

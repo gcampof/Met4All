@@ -76,69 +76,95 @@ get_go_bp_gene_sets <- function() {
 }
 
 
-# Set up annotation cache
+# Process-level memo, shared by every Shiny session in this R process.
+# Lives in globalenv() so it survives Shiny re-sourcing app.R on mtime change
+# (routine under the dev bind mount); a file-scope env would be discarded.
+if (!exists(".M4A_CACHE_MEMO", envir = globalenv(), inherits = FALSE)) {
+  assign(".M4A_CACHE_MEMO", new.env(parent = emptyenv()), envir = globalenv())
+}
+
+# The only columns any consumer reads (global_met/global_utils.R). Keep at least
+# two: annot[cond, ] on a single-column data.frame drops to a vector and
+# rownames() becomes NULL, which empties the CGI/Shore/Shelf facets silently.
+.M4A_RAW_ANNOT_COLS <- c("chr", "Relation_to_Island")
+
+# Set up annotation cache.
+# Artifacts are precomputed at image build time (see shiny/build_cache.R) and
+# read from DIRS$cache; anything missing is built and persisted here.
+# The returned objects are shared by reference across sessions — treat them as
+# read-only (in particular, never apply data.table `:=` to them).
 setup_cache <- function(DIRS, cfg) {
-  cache_dir <- DIRS$cache
-  # Built annotation (expensive)
-  annot_path <- file.path(cache_dir, "built_annot.rds")
-  
-  if (!file.exists(annot_path)) {
-    message("Building annotation... (this may take a few minutes)")
-    built_annot <- methylation_buildannot(cfg$annotation_pkg)
-    saveRDS(built_annot, annot_path)
-    message("Annotation saved to: ", built_annot)
-  } else {
-    message("Loading annotation from cache...")
-    built_annot <- readRDS(annot_path)
+  memo <- get(".M4A_CACHE_MEMO", envir = globalenv())
+  key  <- paste0(cfg$annotation_pkg, "@", DIRS$cache)
+
+  hit <- get0(key, envir = memo, inherits = FALSE)
+  if (!is.null(hit)) {
+    message("[cache] Reusing process-level cache for ", cfg$annotation_pkg)
+    return(hit)
   }
-  
-  # Raw annotation 
-  raw_annot_path <- file.path(cache_dir, "raw_annot.rds")
-  
-  if (!file.exists(raw_annot_path)) {
-    message("Building raw annotation...")
-    raw_annot <- as.data.frame(minfi::getAnnotation(cfg$annotation_pkg))
-    saveRDS(raw_annot, raw_annot_path)
-    message("Raw annotation saved to: ", raw_annot_path)
-  } else {
-    message("Loading raw annotation from cache...")
-    raw_annot <- readRDS(raw_annot_path)
+
+  # Annotation-specific artifacts are keyed by package, so switching between
+  # EPIC and 450k is a cache miss instead of a silent stale read.
+  p <- function(stem) {
+    file.path(DIRS$cache, paste0(stem, "__", cfg$annotation_pkg, ".rds"))
   }
-  
-  # GO-BP gene sets
-  gobp_path <- file.path(cache_dir, "gene_set_list.rds")
-  if (!file.exists(gobp_path)) {
-    message("Building GO-BP gene sets...")
-    gene_set_list <- get_go_bp_gene_sets()
-    saveRDS(gene_set_list, gobp_path)
-  } else {
-    gene_set_list <- readRDS(gobp_path)
-  }
-  
-  pathways_path <- file.path(cache_dir, "pathways.rds")
-  kegg_path <- file.path(DIRS$pathways, cfg$gene_set$kegg)
-  hallmark_path <- file.path(DIRS$pathways, cfg$gene_set$hallmark)
-  
-  if (!file.exists(pathways_path)) {
-    message("Building pathways...")
-    pathways <- list(
-      go_bp     = gene_set_list,
-      kegg      = fgsea::gmtPathways(kegg_path),
-      hallmarks = fgsea::gmtPathways(hallmark_path)
+
+  read_or_build <- function(path, build_fn, label) {
+    if (file.exists(path)) {
+      message("[cache] Loading ", label, " from ", path)
+      return(readRDS(path))
+    }
+    message("[cache] Building ", label, " (not cached at ", path, ")")
+    obj <- build_fn()
+    tryCatch(
+      saveRDS(obj, path),
+      error = function(e) warning("[cache] Could not persist ", path, ": ", e$message)
     )
-    saveRDS(pathways, pathways_path)
-  } else {
-    pathways <- readRDS(pathways_path)
+    obj
   }
-  
-  message("Setup complete")
-  
-  list(
+
+  built_annot <- read_or_build(
+    p("built_annot"),
+    function() methylation_buildannot(cfg$annotation_pkg),
+    "built annotation"
+  )
+
+  raw_annot <- read_or_build(
+    p("raw_annot_slim"),
+    function() {
+      full <- as.data.frame(minfi::getAnnotation(cfg$annotation_pkg))
+      missing_cols <- setdiff(.M4A_RAW_ANNOT_COLS, colnames(full))
+      if (length(missing_cols) > 0) {
+        stop("Annotation '", cfg$annotation_pkg, "' lacks column(s): ",
+             paste(missing_cols, collapse = ", "))
+      }
+      full[, .M4A_RAW_ANNOT_COLS, drop = FALSE]
+    },
+    "raw annotation (slim)"
+  )
+
+  # gene_set_list is only an intermediate for pathways, so it is built lazily
+  # inside it and never needed once pathways.rds exists.
+  pathways <- read_or_build(
+    file.path(DIRS$cache, "pathways.rds"),
+    function() list(
+      go_bp     = read_or_build(file.path(DIRS$cache, "gene_set_list.rds"),
+                                get_go_bp_gene_sets, "GO-BP gene sets"),
+      kegg      = fgsea::gmtPathways(file.path(DIRS$pathways, cfg$gene_set$kegg)),
+      hallmarks = fgsea::gmtPathways(file.path(DIRS$pathways, cfg$gene_set$hallmark))
+    ),
+    "pathways"
+  )
+
+  out <- list(
     built_annot = built_annot,
     raw_annot   = raw_annot,
-    cache_dir   = cache_dir,
     pathways    = pathways
   )
+
+  assign(key, out, envir = memo)
+  message("[cache] Setup complete for ", cfg$annotation_pkg)
+  out
 }
 
 

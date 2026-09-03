@@ -1,7 +1,9 @@
 # config.yml
 default:
   # Static directories (exist before any analysis)
-  cache:                    "cache"
+  # Baked into the image at /opt/met4all/cache via M4A_CACHE_DIR; falls back to
+  # a local cache dir when the variable is unset (RStudio dev container).
+  cache: !expr if (nzchar(Sys.getenv("M4A_CACHE_DIR"))) Sys.getenv("M4A_CACHE_DIR") else "cache"
   data:                     "data"
   filter:                   "common_files/filter"
   custom_color_palette:     "common_files/custom_color_palette"
