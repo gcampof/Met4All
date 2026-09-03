@@ -1604,34 +1604,69 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       run_analysis_trigger(run_analysis_trigger() + 1)
     })
     
-    # Prepare data (only runs when trigger changes)
-    cnv_data <- eventReactive(run_analysis_trigger(), {
+    # Prepare data in a worker process.
+    #
+    # ExtendedTask must not read reactives, so every parameter is snapshotted at
+    # invoke() time below and passed by value. Only paths and scalars cross into
+    # the worker; it reads the MethylSet from disk itself.
+    cnv_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_cnv_data", args, app_dir)
+    })
+
+    app_dir <- normalizePath(getwd())
+
+    observeEvent(run_analysis_trigger(), {
+      req(run_analysis_trigger() > 0)
       req(input$cnv_array_select,
           input$cnv_comparison_col, cnv_bed_path(),
           input$cnv_baseline, input$cnv_comparison)
-      
-      if(is.null(array_names())){
-        shiny::need(FALSE, "CNVs can not be calculated from BetaMatrix only, 
-                    require IDATs")
-      } else {
-        tryCatch({
-          showNotification("Running CNV analysis...", type = "message", duration = 3)
-          result <- prepare_cnv_data(mSetSq_list(),
-                                     input$cnv_array_select, 
-                                     cnv_bed_path(),
-                                     input$cnv_include_xy,
-                                     input$cnv_comparison_col,
-                                     input$cnv_baseline,
-                                     input$cnv_comparison)
-          result
-        }, error = function(e) {
-          error_msg <- e$message
-          shiny::validate(
-            shiny::need(FALSE, paste0("Error preparing CNV data: ", error_msg))
-          )
-          NULL
-        })
+
+      if (is.null(array_names())) {
+        showNotification("CNVs cannot be calculated from a beta matrix only; IDATs are required.",
+                         type = "error", duration = 5)
+        return()
       }
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running CNV analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      cnv_task$invoke(
+        args = list(
+          mset_list      = mSetSq_list(),
+          array_type     = input$cnv_array_select,
+          bed_path       = cnv_bed_path(),
+          chrXY          = input$cnv_include_xy,
+          comparison_col = input$cnv_comparison_col,
+          baseline       = input$cnv_baseline,
+          comparison     = input$cnv_comparison
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    # Keep the Run button honest about what the server is doing.
+    observe({
+      if (identical(cnv_task$status(), "running")) {
+        shinyjs::disable("cnv_run_analysis")
+      } else {
+        shinyjs::enable("cnv_run_analysis")
+      }
+    })
+
+    cnv_data <- reactive({
+      status <- cnv_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "CNV analysis running..."))
+      tryCatch(
+        cnv_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error preparing CNV data: ", conditionMessage(e))))
+          NULL
+        }
+      )
     })
     
     # Generate pile-up plot when data is ready

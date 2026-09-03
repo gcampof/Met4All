@@ -160,3 +160,50 @@ m4a_queue_message <- function() {
   sprintf("Server busy: %d analysis(es) running, %d queued ahead of yours. It will start automatically.",
           s$executing, s$awaiting)
 }
+
+
+# --- Job dispatch -----------------------------------------------------------
+# Run one heavy analysis off the main R thread and return a promise, so the
+# Shiny process stays responsive for every other connected user.
+#
+# The function is named rather than passed by value: sending a closure would
+# drag its whole enclosing environment (including reactives and the beta matrix)
+# across to the worker. The worker sources the module that defines it instead,
+# so only paths and scalar parameters cross the boundary.
+#
+# Falls back to running in-process when no pool is available, so behaviour is
+# unchanged (just blocking) on an image built without mirai.
+m4a_submit <- function(fn_name, args, app_dir = getwd()) {
+  stopifnot(is.character(fn_name), length(fn_name) == 1L, is.list(args))
+
+  if (m4a_ensure_workers()) {
+    return(mirai::mirai(
+      {
+        source(file.path(app_dir, "modules/common/worker_init.R"),
+               local = FALSE)
+        # source() defines into the worker's globalenv, but a mirai expression is
+        # not evaluated in a child of globalenv, so the lookup must be explicit —
+        # otherwise this fails with "could not find function".
+        get("m4a_worker_init", envir = globalenv())(app_dir)
+        # Resolve to the function object before calling. Passing the name to
+        # do.call() relies on lookup rules that do not hold inside a mirai
+        # expression, which surfaces as "could not find function".
+        fun <- get(fn_name, envir = globalenv(), mode = "function")
+        do.call(fun, args)
+      },
+      fn_name = fn_name,
+      args    = args,
+      app_dir = app_dir
+    ))
+  }
+
+  # In-process fallback. The error must come back as a REJECTED promise, not as a
+  # synchronous throw out of this function, or ExtendedTask$invoke() would fail
+  # instead of moving the task to the "error" state.
+  outcome <- tryCatch(do.call(fn_name, args), error = function(e) e)
+  if (inherits(outcome, "error")) {
+    promises::promise_reject(outcome)
+  } else {
+    promises::promise_resolve(outcome)
+  }
+}
