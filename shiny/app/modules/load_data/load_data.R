@@ -777,115 +777,67 @@ load_data_server <- function(id, DIRS, cfg) {
     
     
     # --- QC CONTINUE ---
+    # Beta-matrix generation: the last long blocking stage (15-40 min) and, like
+    # QC, one that runs on every IDAT analysis. The worker reads the RGChannelSets
+    # QC left on disk and returns paths, not the ~450 MB matrix.
+    beta_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_beta_generation", args, app_dir)
+    })
+
     observeEvent(input$qc_continue, {
       shinyjs::hide("ld_qc_view")
       shinyjs::show("ld_loading_view")
-      
+
       arrays <- array_names()
-      
-      # Store paths to beta matrices instead of objects
-      beta_paths <- c()
-      processed_results_paths <- list()
-      
-      tryCatch({
-        for (array in arrays) {
-          message("\n=== Processing beta for ", array, " ===")
-          
-          array_qc_dir <- file.path(DIRS$qc, array)
-          
-          # Get threshold selected for THIS array
-          thr_id <- paste0("ld_qc_threshold_", array)
-          thr <- as.numeric(input[[thr_id]])
-          
-          # LOAD FROM DISK instead of using stored objects
-          rgset_path <- qc_results()$rgsets[[array]]
-          detp_path <- qc_results()$detections[[array]]
-          
-          notification_id <- showNotification("Loading RGset and DetP...", type = "message", duration = 0)
-        
-          message("Loading from disk: ", basename(rgset_path))
-          rgSet <- readRDS(rgset_path)
-          detP <- readRDS(detp_path)
-          
-          message("Loaded RGSet size: ", format(object.size(rgSet), units = "auto"))
-          
-          # Save QC files (percentage failed, plot)
-          failed_perc <- colSums(detP > thr) / nrow(detP) * 100
-          
-          csv_file <- file.path(
-            array_qc_dir,
-            sprintf("1.1-Percentage_of_failed_probes_by_sample_detection_p_%.2f_%s.csv",
-                    thr, array)
-          )
-          write.csv(failed_perc, file = csv_file, quote = FALSE, row.names = TRUE)
- 
-          
-          # Generate and save QC plot
-          p <- generate_detection_p_barplot(
-            array     = array,
-            rgSet     = rgSet,
-            detP      = detP,
-            threshold = thr
-          )
-          
-          plot_file <- file.path(
-            array_qc_dir,
-            sprintf("1.0-Detection_P_barplot_threshold_%.2f_%s.png", thr, array)
-          )
-          ggsave(filename = plot_file, plot = p, width = 12, height = 6, dpi = 300)
-          rm(p, failed_perc)
-          
-          # Generate Beta matrix
-          message("Generating beta matrix for ", array, "...")
-          removeNotification(notification_id)
-          notification_id <- showNotification(paste0("Generating beta matrix for ",
-                                                     array, "..."), type = "message", duration = 2)
-          result_paths <- generate_beta_matrix(
-            array       = array,
-            rgSet       = rgSet,
-            detP        = detP,
-            norm_method = input$normalization,
-            threshold   = thr,
-            filter_dir  = DIRS$filter,
-            beta_dir    = DIRS$beta
-          )
-          
-          # Store the paths
-          beta_paths <- c(beta_paths, result_paths$beta_path)
-          current_list <- mSetSq_list()
-          current_list[[array]] <- result_paths$mset_path
-          mSetSq_list(current_list)
-        }
-        
-        # Create merge directory
-        beta_merge_dir <- create_dir(file.path(DIRS$beta, "merged"))
-        
-        # Merge Beta matrices from disk (only loads one at a time)
-        notification_id <- showNotification("Merging beta matrices from disk...", type = "message", duration = 0)
-        message("\nMerging beta matrices from disk...")
-        beta_mg <- merge_beta_matrix_from_disk(beta_paths, beta_merge_dir)
-        beta_merged(beta_mg)
-        
-        # Merge targets file
-        removeNotification(notification_id)
-        notification_id <- showNotification("Merging sample sheets...", type = "message", duration = 0)
-        message("\nMerging sample sheets...")
-        targets_result <- merge_samplesheets(arrays, DIRS$preprocessing, beta_merge_dir)
-        targets_merged(targets_result$targets_merged)
-        
-        removeNotification(notification_id)
-        notification_id <- showNotification("QC and beta generation completed successfully", type = "message", duration = 2)
+
+      # Snapshot the per-array thresholds now: ExtendedTask must not read inputs.
+      thresholds <- setNames(
+        lapply(arrays, function(a) input[[paste0("ld_qc_threshold_", a)]]),
+        arrays
+      )
+
+      queued <- m4a_queue_message()
+      if (!is.null(queued)) showNotification(queued, type = "message", duration = 8)
+
+      beta_task$invoke(
+        args = list(
+          arrays            = arrays,
+          thresholds        = thresholds,
+          qc_results        = qc_results(),
+          norm_method       = input$normalization,
+          qc_dir            = DIRS$qc,
+          filter_dir        = DIRS$filter,
+          beta_dir          = DIRS$beta,
+          preprocessing_dir = DIRS$preprocessing
+        ),
+        app_dir = normalizePath(getwd())
+      )
+    })
+
+    observeEvent(beta_task$status(), {
+      status <- beta_task$status()
+
+      if (identical(status, "success")) {
+        res <- beta_task$result()
+
+        # The matrix stays on disk in the worker and is loaded here once, because
+        # the interactive analyses that still run in-process need it in memory.
+        beta_merged(readRDS(res$beta_path))
+        targets_merged(res$targets_merged)
+        mSetSq_list(res$mset_paths)
+
+        showNotification("QC and beta generation completed successfully",
+                         type = "message", duration = 3)
         message("QC and beta generation completed successfully")
-        
-      }, error = function(e) {
-        alert_message(list(
-          type = "error",
-          text = paste("Generating Beta matrix failed:", e$message)
-        ))
-      })
-      
-      # Clean up loaded QC data to free memory
-      loaded_qc_data <- reactiveValues()
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ beta_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        shinyjs::hide("ld_loading_view")
+        shinyjs::show("ld_qc_view")
+        alert_message(list(type = "error",
+                           text = paste("Generating Beta matrix failed:", msg)))
+      }
     })
     
     return(list(

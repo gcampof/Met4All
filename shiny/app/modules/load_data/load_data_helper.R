@@ -983,7 +983,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   rm(keep)
 
   ## ---- 1. Normalization ----
-  notification_id <- showNotification(paste0("Normalizing ", array, " ..."), type = "message", duration = 0)
+  message("[beta] ", paste0("Normalizing ", array, " ..."))
   mSetSq <- normalizeMeth(rgSet, norm_method)
 
   ## ---- 2. Raw & normalized beta/M values ----
@@ -994,19 +994,16 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   # rm(beta_unf)
 
   ## ---- 3. Detection p-value filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Detection p-value filtering...", type = "message", duration = 0)
+  message("[beta] ", "Detection p-value filtering...")
   mSetSq <- filterDetectionP(rgSet, detP, mSetSq, threshold)
   rm(rgSet, detP)
 
   ## ---- 4. Probe filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Probe filtering...", type = "message", duration = 0)
+  message("[beta] ", "Probe filtering...")
   mSetSq_flt <- filterProbes(mSetSq, filter_dir)
 
   ## ---- 5. FFPE / Frozen adjustment ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("FFPE/ Froxen adjustment...", type = "message", duration = 0)
+  message("[beta] ", "FFPE/ Froxen adjustment...")
   meth   <- minfi::getMeth(mSetSq_flt)
   unmeth <- minfi::getUnmeth(mSetSq_flt)
   beta   <- adjustFFPE(meth, unmeth, mSetSq_flt$Tissue_Type)
@@ -1027,16 +1024,14 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   # rm(mVals_unf)
 
   ## ---- 7. Final SNP / XY / cross-hyb filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Final SNP/XY/cross-hyb filtering...", type = "message", duration = 0)
+  message("[beta] ", "Final SNP/XY/cross-hyb filtering...")
   beta <- finalizeBeta(beta)
 
   ## ---- 8. Beta QCplots ----
   # plotPostQC(mSetSq_flt, array, array_beta_dir)
 
   ## ---- 9. Beta Boxplots ---
-  removeNotification(notification_id)
-  notification_id <- showNotification("Generating Beta boxplots...", type = "message", duration = 0)
+  message("[beta] ", "Generating Beta boxplots...")
   generate_beta_boxplot_static(array, beta, out_dir = array_beta_dir)
 
   ## ---- 10. Save outputs ----
@@ -1044,8 +1039,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   mset_path <- file.path(array_beta_dir, paste0("002_unfilteredData_", array, ".rds"))
   # mset_flt_path <- file.path(array_beta_dir, paste0("003_filteredData_", array, ".rds"))
 
-  removeNotification(notification_id)
-  notification_id <- showNotification("Saving beta matrix...", type = "message", duration = 0)
+  message("[beta] ", "Saving beta matrix...")
   message("Saving beta to: ", beta_path)
   saveRDS(beta, file = beta_path, compress = FALSE)
   rm(beta)
@@ -1057,8 +1051,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   # message("Saving mSetSq_flt to: ", mset_flt_path)
   # saveRDS(mSetSq_flt, file = mset_flt_path, compress = FALSE)
   
-  removeNotification(notification_id)
-  notification_id <- showNotification(paste0("Finished array: ", array), type = "message", duration = 0)
+  message("[beta] ", paste0("Finished array: ", array))
   message("Finished array: ", array)
 
   # Cleanup
@@ -1293,4 +1286,80 @@ run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_d
   unlink(file.path(input_dir, "*"), recursive = TRUE, force = TRUE)
 
   load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir)
+}
+
+
+# Beta-matrix generation for every array, run as one worker job.
+#
+# The last of the long blocking stages (15-40 min for 70 EPIC samples) and, like
+# QC, it runs on every IDAT analysis. It reads the RGChannelSets the QC stage left
+# on disk, so only thresholds and paths go in. The merged matrix is returned as a
+# path rather than a value: merge_beta_matrix_from_disk already writes it, and
+# sending ~450 MB back through the worker channel would undo the point.
+#
+# thresholds is a named character/numeric vector, one entry per array.
+run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
+                                qc_dir, filter_dir, beta_dir, preprocessing_dir) {
+  beta_paths <- c()
+  mset_paths <- list()
+
+  for (array in arrays) {
+    message("[beta] === Processing beta for ", array, " ===")
+    array_qc_dir <- file.path(qc_dir, array)
+    thr <- as.numeric(thresholds[[array]])
+
+    message("[beta] Loading RGSet and detP for ", array)
+    rgSet <- readRDS(qc_results$rgsets[[array]])
+    detP  <- readRDS(qc_results$detections[[array]])
+
+    # Per-sample failure rate at the chosen threshold
+    failed_perc <- colSums(detP > thr) / nrow(detP) * 100
+    write.csv(
+      failed_perc,
+      file = file.path(array_qc_dir,
+                       sprintf("1.1-Percentage_of_failed_probes_by_sample_detection_p_%.2f_%s.csv",
+                               thr, array)),
+      quote = FALSE, row.names = TRUE
+    )
+
+    p <- generate_detection_p_barplot(array = array, rgSet = rgSet,
+                                      detP = detP, threshold = thr)
+    ggplot2::ggsave(
+      filename = file.path(array_qc_dir,
+                           sprintf("1.0-Detection_P_barplot_threshold_%.2f_%s.png", thr, array)),
+      plot = p, width = 12, height = 6, dpi = 300
+    )
+    rm(p, failed_perc)
+
+    message("[beta] Generating beta matrix for ", array)
+    result_paths <- generate_beta_matrix(
+      array       = array,
+      rgSet       = rgSet,
+      detP        = detP,
+      norm_method = norm_method,
+      threshold   = thr,
+      filter_dir  = filter_dir,
+      beta_dir    = beta_dir
+    )
+
+    beta_paths <- c(beta_paths, result_paths$beta_path)
+    mset_paths[[array]] <- result_paths$mset_path
+
+    rm(rgSet, detP)
+    gc()
+  }
+
+  beta_merge_dir <- create_dir(file.path(beta_dir, "merged"))
+
+  message("[beta] Merging beta matrices from disk")
+  merge_beta_matrix_from_disk(beta_paths, beta_merge_dir)
+
+  message("[beta] Merging sample sheets")
+  targets_result <- merge_samplesheets(arrays, preprocessing_dir, beta_merge_dir)
+
+  list(
+    beta_path      = file.path(beta_merge_dir, "beta_merged.rds"),
+    mset_paths     = mset_paths,
+    targets_merged = targets_result$targets_merged
+  )
 }
