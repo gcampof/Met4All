@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install CRAN packages via pak for speed
 RUN R -e 'install.packages("pak", repos = "https://r-lib.github.io/p/pak/dev/")'
-RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "here", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
+RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "mirai", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "here", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
 
 # Install BiocManager first
 RUN R -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org")'
@@ -57,6 +57,17 @@ RUN mkdir -p /opt/met4all/cache && \
     ls -lh /opt/met4all/cache
 
 ENV M4A_CACHE_DIR=/opt/met4all/cache
+
+# Concurrency limits. Threads are capped at the process level so OpenMP (data.table)
+# and BLAS cannot each grab the whole host; per-worker limits are applied on top of
+# these in modules/common/concurrency.R.
+#   M4A_MAX_JOBS        concurrent heavy analyses (worker pool size)
+#   M4A_THREADS_PER_JOB threads inside each worker
+# Sizing rule: RAM ~= 2 GB + M4A_MAX_JOBS * 5 GB.
+ENV OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    M4A_MAX_JOBS=2 \
+    M4A_THREADS_PER_JOB=2
 
 # Create runtime directionres with correct ownership
 RUN mkdir -p /srv/shiny-server/data /srv/shiny-server/cache && \

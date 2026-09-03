@@ -1,3 +1,4 @@
+source("modules/common/concurrency.R")
 source("modules/common/utils.R")
 source("modules/load_data/load_data.R")
 source("modules/primary_analysis/primary_analysis_ui.R")
@@ -31,8 +32,14 @@ library(tools)
 library(matrixStats)
 library(ggpubr)
 
-options(shiny.reactlog = TRUE)
+# reactlog is deliberately OFF: it grows without bound for the life of the shared
+# R process and its /reactlog endpoint exposes every session's reactive graph.
+# Set M4A_REACTLOG=1 locally if you need it for debugging.
+options(shiny.reactlog = nzchar(Sys.getenv("M4A_REACTLOG")))
 options(shiny.maxRequestSize = 10 * 1024^3)
+
+# Stop data.table/BLAS/BiocParallel from each sizing themselves to the whole host.
+m4a_apply_thread_caps()
 
 # JavaScript reset code
 jsResetCode <- "shinyjs.resetPage = function() {history.go(0)}"
@@ -150,7 +157,11 @@ server <- function(input, output, session) {
   cfg  <- config::get()
   DIRS <- setup_common_dirs(cfg)
   DIRS <- setup_analysis_dir(DIRS, cfg, session)
-  
+
+  # Protect this session's results from the startup sweep below, and release
+  # them when the session ends.
+  register_analysis_dir(DIRS$analysis, session)
+
   APP_CACHE <- reactiveVal(NULL)
   
   # Flags
