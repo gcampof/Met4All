@@ -46,10 +46,18 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     })
     message("[PRIMARY_ANALYSIS] Setup complete!")
     
-    # Set qc path
-    observe({
-      addResourcePath(prefix = "qc_reports",
+    # Set qc path.
+    # addResourcePath registers PROCESS-GLOBALLY while DIRS$qc is per session, so a
+    # shared "qc_reports" prefix means the last session to connect owns it and every
+    # other user's iframe is served that session's reports. The prefix is therefore
+    # session-scoped, registered once, and released when the session ends.
+    qc_resource_prefix <- paste0("qc_reports_", substr(session$token, 1, 8))
+    observeEvent(DIRS$qc, once = TRUE, {
+      addResourcePath(prefix = qc_resource_prefix,
                       directoryPath = normalizePath(DIRS$qc))
+    })
+    session$onSessionEnded(function() {
+      try(removeResourcePath(qc_resource_prefix), silent = TRUE)
     })
     
     # Disable/enable buttons based on data type (beta or idats)
@@ -268,8 +276,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         arr <- input$qc_pdf_tabset
         req(arr)
         
-        # Build URL using the registered alias, not the filesystem path
-        src <- paste0("qc_reports/", arr, "/2.0-QC_Report_", arr, ".pdf")
+        # Build URL using this session's registered alias, not the filesystem path
+        src <- paste0(qc_resource_prefix, "/", arr, "/2.0-QC_Report_", arr, ".pdf")
         
         output_id <- paste0("pa_qc_viewer", arr)
         output[[output_id]] <- renderText({
@@ -576,8 +584,12 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         out_path <- file.path(DIRS$umap, file_name)
         file.copy(from = in_path, to = out_path, overwrite = TRUE)
         
-        # Load and store the model
+        # Load and store the model. readRDS on an uploaded file is only as safe as
+        # the file, so check it really is a UMAP model before anything uses it.
         model <- readRDS(out_path)
+        if (!is.list(model) || is.null(model$layout) || is.null(model$config)) {
+          stop("This file is not a UMAP model (expected 'layout' and 'config').")
+        }
         cached_umap_model(model)
         
         showNotification("UMAP model loaded successfully", type = "message", duration = 3)
@@ -802,8 +814,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           rowK           = heatmap_plot_params()$row_k,
           colK           = heatmap_plot_params()$col_k,
           show_row_names = heatmap_plot_params()$show_row_names,
-          show_col_names = heatmap_plot_params()$show_col_names,
-          out_dir        = DIRS$heatmap
+          show_col_names = heatmap_plot_params()$show_col_names
         )
         removeNotification(notification_id)
         result
@@ -819,10 +830,21 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       cached_heatmap_result()$ht
     })
     
-    # Store consensus cluster properly into targets_merged
+    # Store consensus cluster properly into targets_merged.
+    # This also writes the ConsensusClass TSV, deliberately OUTSIDE the cached
+    # reactive above: its cache is app-scoped, so on a cross-session hit the file
+    # would never be written into this session's results dir.
     observeEvent(cached_heatmap_result(), {
       req(cached_heatmap_result(), input$heatmap_id_col)
       col_class <- cached_heatmap_result()$col_class
+
+      try(write.table(
+        data.frame(sample = names(col_class), CCP_cluster = col_class),
+        file = file.path(DIRS$heatmap,
+                         paste0("ConsensusClass_k", input$heatmap_col_k, ".tsv")),
+        sep = "\t", quote = FALSE, row.names = FALSE
+      ), silent = TRUE)
+
       updated <- targets_merged()
       # Match by ID
       updated$consensus_cluster <- factor(paste0("CC", col_class[updated[[input$heatmap_id_col]]]))
