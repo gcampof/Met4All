@@ -15,8 +15,7 @@ prepare_heatmap_cc <- function(
     cc_kmax,
     cc_reps,
     cc_pItem,
-    cc_seed,
-    out_dir
+    cc_seed
 ) {
   notification_id <- NULL
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
@@ -97,8 +96,7 @@ plot_heatmap <- function(
     rowK,
     colK,
     show_row_names = FALSE,
-    show_col_names = FALSE,
-    out_dir
+    show_col_names = FALSE
 ) {
   notification_id <- NULL
   mat      <- cc_data$mat
@@ -116,14 +114,11 @@ plot_heatmap <- function(
   row_tree  <- hclust(row_cor_dist(mat), method = "ward.D2")
   col_class <- cc[[colK]]$consensusClass[colnames(mat)]
   col_split <- factor(col_class)
-  
-  # Store cc output .tsv
-  write.table(
-    data.frame(sample = names(col_class), CCP_cluster = col_class),
-    file = file.path(out_dir, paste0("ConsensusClass_k", colK, ".tsv")),
-    sep = "\t", quote = FALSE, row.names = FALSE
-  )
-  
+
+  # NOTE: the ConsensusClass TSV is written by the caller, not here. This function
+  # runs inside a bindCache()d reactive whose cache is shared across sessions, so a
+  # cache hit would skip the write and leave the download with no file.
+
   chtm <- ComplexHeatmap::Heatmap(
     mat,
     name = "Methylation",

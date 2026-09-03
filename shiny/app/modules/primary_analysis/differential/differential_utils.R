@@ -5,6 +5,21 @@ run_fgsea <- function(stats, pws) {
   gsea_maxSize = 600
   seed = 123456
   
+  # Scope the seed to this call. A bare set.seed() reseeds the RNG of the shared
+  # R process, silently perturbing other users' UMAP and consensus clustering.
+  old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+    get(".Random.seed", envir = globalenv(), inherits = FALSE)
+  } else {
+    NULL
+  }
+  on.exit({
+    if (is.null(old_seed)) {
+      suppressWarnings(rm(".Random.seed", envir = globalenv()))
+    } else {
+      assign(".Random.seed", old_seed, envir = globalenv())
+    }
+  }, add = TRUE)
+
   set.seed(seed)
   res <- fgsea::fgsea(
     pathways = pws,
@@ -284,11 +299,24 @@ get_dmrs <- function(
   
   # Fixed values
   champ_minProbes = 5
-  champ_cores = 4
+  champ_cores = m4a_threads_per_job()
   champ_dmr_method = "ProbeLasso"
-  
+
+  # ChAMP writes ProbeLasso output to resultsDir; left unset it defaults to
+  # ./CHAMP_ProbeLasso/ in the shared working directory, where concurrent users
+  # overwrite each other (and the dev bind mount puts it in the git tree).
+  champ_results_dir <- file.path(out_dir, "champ_probelasso")
+  dir.create(champ_results_dir, showWarnings = FALSE, recursive = TRUE)
+
   # run champ
+  # ChAMP plots unconditionally, so swallow it into a throwaway device. Close only
+  # that device — graphics devices are process-global and a bare dev.off() would
+  # close whichever device another user's render happened to leave current.
   png(tempfile())
+  champ_dev <- grDevices::dev.cur()
+  on.exit({
+    if (champ_dev %in% grDevices::dev.list()) grDevices::dev.off(champ_dev)
+  }, add = TRUE)
   removeNotification(id = "dmrs_calc")
   notification_id <- showNotification("Running ChAMP, please wait this might take a while ...", 
                                       type = "message", duration = NULL, id = "dmrs_calc")
@@ -300,15 +328,14 @@ get_dmrs <- function(
       method        = champ_dmr_method,
       arraytype     = "EPIC",
       compare.group = c("Baseline", "Comparison"),
-      # resultsDir    = tempdir(),
+      resultsDir    = champ_results_dir,
       minProbes     = champ_minProbes
     )
   }, error = function(e) {
     message("champ.DMR failed: ", e$message)
     return(NULL)
   })
-  dev.off()
-  
+
   # extract results
   dmrs <- dmrs_champ_res$ProbeLassoDMR
   
