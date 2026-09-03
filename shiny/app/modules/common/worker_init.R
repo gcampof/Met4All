@@ -42,6 +42,7 @@ m4a_worker_init <- function(app_dir) {
     library(colorspace)
 
     source("modules/common/utils.R")
+    source("modules/load_data/load_data_helper.R")
     source("modules/primary_analysis/annotations.R")
     source("modules/primary_analysis/utils.R")
     source("modules/primary_analysis/cnv/cnv_utils.R")

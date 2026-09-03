@@ -558,38 +558,52 @@ load_data_server <- function(id, DIRS, cfg) {
     
     
     # --- RUN QC ---
+    # The longest blocking step in the app (10-25 min for 70 EPIC samples) and it
+    # runs on every IDAT analysis, so it goes to a worker. Only the samples table
+    # goes in and a list of file paths comes back; the multi-GB RGChannelSets are
+    # written straight to disk by the worker.
+    qc_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_qc_ingest", args, app_dir)
+    })
+
     observeEvent(input$run_qc, {
       shinyjs::hide("ld_idats_view")
       shinyjs::show("ld_loading_view")
-        tryCatch({
-          notification_id <- showNotification("Separating unused IDATs...", type="message", duration=0)
-          selected_idats <- input$idat_table_rows_selected
-          separate_unselected_idats(samples_df(), selected_idats, DIRS$preprocessing)
-          
-          removeNotification(notification_id)
-          notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=3)
-          parse_samplesheets(DIRS$input, DIRS$preprocessing)
-          
-          # Mid processing clean up. Needs recursive = TRUE — without it unlink()
-          # silently refuses to remove a directory, leaking the whole raw upload
-          # (~1.8 GB for 70 EPIC samples) for the life of the analysis.
-          unlink(file.path(DIRS$input, "*"), recursive = TRUE, force = TRUE)
-          
-          # Run QC loading
-          qc_res_temp <- load_qc_data_for_arrays_batch(DIRS$preprocessing, DIRS$qc)
-          
-          qc_results(qc_res_temp$qc_results)
-          array_names(qc_res_temp$arrays_used)
-          
-          notification_id <- showNotification("Complete!", type="message", duration=3)
-          shinyjs::hide("ld_loading_view")
-          shinyjs::show("ld_qc_view")
-        }, error = function(e) {
-          alert_message(list(
-            type = "error",
-            text = paste("Running QC failed:", e$message)
-          ))
-        })
+
+      queued <- m4a_queue_message()
+      if (!is.null(queued)) showNotification(queued, type = "message", duration = 8)
+
+      qc_task$invoke(
+        args = list(
+          samples_df        = samples_df(),
+          selected_idats    = input$idat_table_rows_selected,
+          input_dir         = DIRS$input,
+          preprocessing_dir = DIRS$preprocessing,
+          qc_dir            = DIRS$qc
+        ),
+        app_dir = normalizePath(getwd())
+      )
+    })
+
+    # Pick the result up when the worker finishes.
+    observeEvent(qc_task$status(), {
+      status <- qc_task$status()
+
+      if (identical(status, "success")) {
+        res <- qc_task$result()
+        qc_results(res$qc_results)
+        array_names(res$arrays_used)
+        showNotification("Complete!", type = "message", duration = 3)
+        shinyjs::hide("ld_loading_view")
+        shinyjs::show("ld_qc_view")
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ qc_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        shinyjs::hide("ld_loading_view")
+        shinyjs::show("ld_idats_view")
+        alert_message(list(type = "error", text = paste("Running QC failed:", msg)))
+      }
     })
     
     
