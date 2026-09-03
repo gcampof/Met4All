@@ -52,7 +52,9 @@ get_matching_colors <- function(color_vals, color_palette){
   base_colors <- color_palette(n_needed)
   if (length(base_colors) < n_needed) 
     base_colors <- rep_len(base_colors, n_needed)
-  matched_colors <- setNames(base_colors, color_vals)
+  # Palettes can return more colours than asked for (brewer.pal has a minimum of
+  # 3), which would leave NA-named entries.
+  matched_colors <- setNames(base_colors[seq_len(n_needed)], color_vals)
   
   return(matched_colors)
 }

@@ -23,6 +23,14 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # Reactive states
     umap_data <- reactiveVal(NULL)
     current_view <- reactiveVal(NULL)
+
+    # Path to the beta matrix on disk, used by every worker-backed analysis.
+    # beta_merged is only ever assigned at load time so the file and the reactive
+    # cannot diverge; targets, by contrast, is edited in-session and so is always
+    # passed by value.
+    beta_rds_path <- reactive({
+      file.path(DIRS$beta, "merged", "beta_merged.rds")
+    })
     PALETTES <- reactive({
       do.call(reactiveValues,
               prepare_color_palettes(DIRS$custom_color_palette))
@@ -754,74 +762,85 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     heatmap_analysis_trigger <- reactiveVal(0)
     
     # Store the rendered heatmap plot for downloads
-    cached_heatmap_ht <- reactiveVal(NULL)
-    
-    # Reactive that only runs when trigger changes or parameters change
-    heatmap_cc_data <- eventReactive(input$heatmap_run_analysis, {
-      req(
-        beta_merged(), targets_merged(),
-        input$heatmap_id_col,
-        input$heatmap_cc_kmax, input$heatmap_cc_reps,
-        input$heatmap_cc_pItem, input$heatmap_cc_seed,
-        input$heatmap_color_palette
+    # Consensus clustering runs in a worker: it is the expensive half, and at the
+    # top of the CpG slider the row dendrogram alone builds a ~800 MB matrix.
+    heatmap_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_heatmap_cc", args, app_dir)
+    })
+
+    observeEvent(input$heatmap_run_analysis, {
+      req(beta_merged(), targets_merged(), input$heatmap_id_col,
+          input$heatmap_cc_kmax, input$heatmap_cc_reps,
+          input$heatmap_cc_pItem, input$heatmap_cc_seed,
+          input$heatmap_color_palette)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running heatmap analysis..." else queued,
+        type = "message", duration = 5
       )
-      
-      showNotification("Running heatmap analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_heatmap_cc(
-          beta            = beta_merged(),
+
+      heatmap_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
           targets         = targets_merged(),
           id_col          = input$heatmap_id_col,
           annotation_cols = input$heatmap_annotation_cols,
-          color_palette   = PALETTES()$all_palettes[[input$heatmap_color_palette]],
+          palette_dir     = DIRS$custom_color_palette,
+          palette_name    = input$heatmap_color_palette,
           top_cpgs        = input$heatmap_top,
           cc_kmax         = input$heatmap_cc_kmax,
           cc_reps         = input$heatmap_cc_reps,
           cc_pItem        = input$heatmap_cc_pItem,
           cc_seed         = input$heatmap_cc_seed
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error:", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Separate reactive for plot parameters (doesn't trigger recomputation)
-    heatmap_plot_params <- reactive({
-      list(
-        cc_data = heatmap_cc_data(),
-        row_k = input$heatmap_row_k,
-        col_k = input$heatmap_col_k,
-        show_row_names = input$heatmap_show_row_names,
-        show_col_names = input$heatmap_show_col_names,
-        legend_pos = input$heatmap_legend_position,
-        annot_legend_pos = input$heatmap_annotation_legend_position
+        ),
+        app_dir = app_dir
       )
     })
-    
-    # Create plot only when parameters OR data changes
+
+    observe({
+      if (identical(heatmap_task$status(), "running")) {
+        shinyjs::disable("heatmap_run_analysis")
+      } else {
+        shinyjs::enable("heatmap_run_analysis")
+      }
+    })
+
+    heatmap_cc_data <- reactive({
+      status <- heatmap_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "Consensus clustering running..."))
+      tryCatch(
+        heatmap_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+          NULL
+        }
+      )
+    })
+
+    # Appearance changes rebuild only the Heatmap object, which is now cheap
+    # because the clustering arrived with the worker result. bindCache went with
+    # it: its key hashed the whole cc_data, and being app-scoped it could serve
+    # one session a plot computed for another.
     cached_heatmap_result <- reactive({
-      req(heatmap_plot_params()$cc_data)
-      notification_id <- showNotification("Rendering heatmap, please wait...", type = "message", duration = NULL)
-      tryCatch({
-        result <- plot_heatmap(
-          cc_data        = heatmap_plot_params()$cc_data,
-          rowK           = heatmap_plot_params()$row_k,
-          colK           = heatmap_plot_params()$col_k,
-          show_row_names = heatmap_plot_params()$show_row_names,
-          show_col_names = heatmap_plot_params()$show_col_names
-        )
-        removeNotification(notification_id)
-        result
-      }, error = function(e) {
-        shiny::validate(shiny::need(FALSE, paste0("Error rendering heatmap: ", e$message)))
-        NULL
-      })
-    }) %>% bindCache(heatmap_plot_params())
+      req(heatmap_cc_data())
+      tryCatch(
+        plot_heatmap(
+          cc_data        = heatmap_cc_data(),
+          rowK           = input$heatmap_row_k,
+          colK           = input$heatmap_col_k,
+          show_row_names = input$heatmap_show_row_names,
+          show_col_names = input$heatmap_show_col_names
+        ),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error rendering heatmap: ", conditionMessage(e))))
+          NULL
+        }
+      )
+    })
     
     # Helper accessors
     cached_heatmap_ht <- reactive({
@@ -1087,13 +1106,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # beta_diff, which is the largest object here and must not cross back.
     diff_task <- ExtendedTask$new(function(args, app_dir) {
       m4a_submit("run_differential_analysis", args, app_dir)
-    })
-
-    # Path to the beta matrix on disk. beta_merged is only ever assigned at load
-    # time, so the file and the reactive cannot diverge; targets, by contrast, is
-    # edited in-session and is therefore passed by value.
-    beta_rds_path <- reactive({
-      file.path(DIRS$beta, "merged", "beta_merged.rds")
     })
 
     observeEvent(input$diff_met_run_analysis, {
