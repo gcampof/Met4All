@@ -41,23 +41,67 @@ setup_analysis_dir <- function(common_dirs, cfg, session) {
 }
 
 
+# Analysis dirs belonging to sessions that are still connected in THIS process.
+# Registered dirs are never swept, however old they look.
+if (!exists(".M4A_LIVE_DIRS", envir = globalenv(), inherits = FALSE)) {
+  assign(".M4A_LIVE_DIRS", new.env(parent = emptyenv()), envir = globalenv())
+}
+
+.M4A_HEARTBEAT <- ".m4a_active"
+
+# Register an analysis dir as live and keep it swept-safe for as long as the
+# session lasts. The heartbeat file is what protects it from OTHER replicas
+# sharing the same data volume, which cannot see this process's registry.
+register_analysis_dir <- function(analysis_dir, session) {
+  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
+  assign(analysis_dir, TRUE, envir = live)
+  touch_analysis_dir(analysis_dir)
+
+  session$onSessionEnded(function() {
+    suppressWarnings(rm(list = analysis_dir, envir = live))
+    unlink(file.path(analysis_dir, .M4A_HEARTBEAT), force = TRUE)
+  })
+
+  invisible(analysis_dir)
+}
+
+touch_analysis_dir <- function(analysis_dir) {
+  hb <- file.path(analysis_dir, .M4A_HEARTBEAT)
+  # Writing the file (not just creating it) is what advances the parent dir's
+  # mtime, which is the signal cleanup_old_analysis_dirs reads.
+  try(writeLines(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), hb), silent = TRUE)
+  invisible(hb)
+}
+
+# Reclaim abandoned analysis dirs.
+#
+# The age test deliberately uses the heartbeat file, not the directory's own
+# mtime: a directory's mtime only advances when an entry is added or removed
+# directly inside it, and every analysis writes into results/ subdirs instead.
+# The old mtime check therefore froze at creation time, so a session still
+# running after max_age_hours had its entire tree deleted by the next visitor.
 cleanup_old_analysis_dirs <- function(base_dir, max_age_hours = 24) {
-  if (!dir.exists(base_dir)) return()
-  
+  if (!dir.exists(base_dir)) return(invisible(NULL))
+
+  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
   dirs <- list.dirs(base_dir, recursive = FALSE, full.names = TRUE)
-  now <- Sys.time()
-  
+  now  <- Sys.time()
+
   for (d in dirs) {
-    info <- file.info(d)
-    if (is.na(info$mtime)) next
-    
-    age <- difftime(now, info$mtime, units = "hours")
-    
-    if (age > max_age_hours) {
+    # Live in this process.
+    if (!is.null(get0(d, envir = live, inherits = FALSE))) next
+
+    hb <- file.path(d, .M4A_HEARTBEAT)
+    last_seen <- if (file.exists(hb)) file.info(hb)$mtime else file.info(d)$mtime
+    if (is.na(last_seen)) next
+
+    if (difftime(now, last_seen, units = "hours") > max_age_hours) {
       unlink(d, recursive = TRUE, force = TRUE)
       message("[CLEANUP] Removed old analysis dir: ", d)
     }
   }
+
+  invisible(NULL)
 }
 
 

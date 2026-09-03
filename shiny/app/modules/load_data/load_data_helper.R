@@ -1,3 +1,34 @@
+# Reject an uploaded archive before extracting it. Uploads are unauthenticated and
+# land on a volume shared with every other user's analysis, so refuse absolute or
+# traversing entry paths and anything that expands far beyond the disk we have.
+validate_archive <- function(path, max_entries = 20000, max_uncompressed_gb = 40) {
+  entries <- tryCatch(archive::archive(path), error = function(e) NULL)
+  if (is.null(entries)) {
+    stop("Could not read '", basename(path), "' as an archive.")
+  }
+
+  if (nrow(entries) > max_entries) {
+    stop("Archive '", basename(path), "' contains ", nrow(entries),
+         " entries (limit ", max_entries, ").")
+  }
+
+  bad <- grepl("^(/|[A-Za-z]:)", entries$path) |
+    grepl("(^|/)\\.\\.(/|$)", entries$path)
+  if (any(bad)) {
+    stop("Archive '", basename(path), "' contains unsafe paths, e.g. '",
+         entries$path[which(bad)[1]], "'.")
+  }
+
+  total_gb <- sum(as.numeric(entries$size), na.rm = TRUE) / 1024^3
+  if (total_gb > max_uncompressed_gb) {
+    stop("Archive '", basename(path), "' expands to ", round(total_gb, 1),
+         " GB (limit ", max_uncompressed_gb, " GB).")
+  }
+
+  invisible(TRUE)
+}
+
+
 ARRAY_SUPPORTED <- list(
   `450K` = c("450k", "450", "hm450", "hm_450", "illumina 450k"),
   EPIC = c("epic","epicv1", "epic_v1", "epic_1", "epic v1", "epicv.1"),

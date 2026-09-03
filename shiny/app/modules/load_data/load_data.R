@@ -435,7 +435,13 @@ load_data_server <- function(id, DIRS, cfg) {
       tryCatch({
         notification_id <- showNotification("Extracting files from zip...", type="message", duration=0)
         zip_paths <- input$zipfile$datapath
-        archive::archive_extract(zip_paths, dir = DIRS$input)
+        # archive_extract takes one archive at a time, but the fileInput allows
+        # multiple, so extract them in a loop rather than silently dropping all
+        # but the first. Each is checked before extraction.
+        for (zp in zip_paths) {
+          validate_archive(zp)
+          archive::archive_extract(zp, dir = DIRS$input)
+        }
         
         if (type_selected() == "IDATS") {
           removeNotification(notification_id)
@@ -561,8 +567,10 @@ load_data_server <- function(id, DIRS, cfg) {
           notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=3)
           parse_samplesheets(DIRS$input, DIRS$preprocessing)
           
-          # Mid processing clean up
-          unlink(DIRS$input)
+          # Mid processing clean up. Needs recursive = TRUE — without it unlink()
+          # silently refuses to remove a directory, leaking the whole raw upload
+          # (~1.8 GB for 70 EPIC samples) for the life of the analysis.
+          unlink(file.path(DIRS$input, "*"), recursive = TRUE, force = TRUE)
           
           # Run QC loading
           qc_res_temp <- load_qc_data_for_arrays_batch(DIRS$preprocessing, DIRS$qc)
