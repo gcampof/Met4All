@@ -1,12 +1,11 @@
 # Module UI function - Improved version matching heatmap aesthetics
 differential_met_ui <- function(ns){
   div(
-    class = "d-flex gap-3 mt-3",
-    style = "align-items: flex-start;",
+    class = "analysis-row",
     
     # LEFT PANEL
     div(
-      style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
+      class = "analysis-side",
       
       # ---- TOP ACTION BAR (Always visible) ----
       div(
@@ -111,8 +110,7 @@ differential_met_ui <- function(ns){
     # RIGHT PANEL — tabset results
     # ================================================================
     div(
-      class = "flex-grow-1",
-      style = "min-width: 0; display: flex; flex-direction: column;",
+      class = "analysis-main",
       
       tabsetPanel(
         id   = ns("diff_met_tabset"),

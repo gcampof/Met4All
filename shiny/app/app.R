@@ -57,8 +57,42 @@ ui <- fluidPage(
   
   tags$head(
     tags$style(HTML("
+      /* App shell: the viewport is the frame. The navbar keeps its natural
+         height and the content area takes the rest, so the page itself never
+         scrolls — only the panels that are meant to. */
+      html, body { height: 100%; }
+      body { margin: 0; overflow: hidden; }
+
+      body > .container-fluid {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 0;
+      }
+
+      .content-container {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      /* Loading view is a long form and scrolls as a whole; the analysis view
+         manages its own internal scrolling. */
+      #view_load { height: 100%; overflow-y: auto; }
+      #view_primary { height: 100%; min-height: 0; }
+
+      /* Below the width this layout is designed for there is no sensible way to
+         fit a 250px nav plus a 280px control column plus a plot, so fall back to
+         ordinary page scrolling rather than clipping content. */
+      @media (max-width: 900px), (max-height: 520px) {
+        body { overflow: auto; }
+        body > .container-fluid { height: auto; overflow: visible; }
+        #view_load, #view_primary { height: auto; }
+      }
+
       /* Custom navbar styling */
       .custom-navbar {
+        flex: 0 0 auto;
         background-color: #ffffff;
         box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         border-bottom: 1px solid #e9ecef;

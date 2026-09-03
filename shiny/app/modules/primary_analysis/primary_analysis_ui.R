@@ -19,27 +19,171 @@ primary_analysis_ui <- function(id) {
         --sidebar-width: 250px;
         --param-panel-width: 280px;
         --sample-panel-width: 220px;
-        --header-offset: 400px;
-        --main-offset: 100px;
-        --plot-offset: 230px;
       }
-      
-      .param-panel {
-        width: var(--param-panel-width);
-        min-width: var(--param-panel-width);
-        max-height: calc(100vh - var(--header-offset));
+
+      /* Layout is a single flex chain from the viewport down to the plot, so
+         heights are derived rather than guessed. Every link needs min-height:0,
+         otherwise a flex item refuses to shrink below its content and pushes the
+         page into a second scrollbar. Only .param-panel and the sidebar scroll. */
+
+      .pa-shell {
+        height: 100%;
+        min-height: 0;
+      }
+
+      .pa-sidebar {
+        flex: 0 0 var(--sidebar-width);
         overflow-y: auto;
       }
-      
-      .plot-card {
-        max-height: calc(100vh - var(--plot-offset));
+
+      .pa-main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
       }
-      
-      .plot-card > div {
-        max-height: calc(100vh - var(--plot-offset));
+
+      .pa-title { flex: 0 0 auto; }
+
+      .content-section {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Views that are not an analysis layout (beta matrix, QC, samplesheet)
+         scroll as one block inside the frame rather than growing the page. */
+      .content-section > .shiny-html-output,
+      .content-section > div:not(.analysis-row) {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+      }
+
+      .analysis-row {
+        display: flex;
+        gap: 1rem;
+        flex: 1 1 auto;
+        min-height: 0;
+        align-items: stretch;
+      }
+
+      .analysis-side {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 0 0 var(--param-panel-width);
+        /* Without min-width:0 a flex item cannot shrink below its min-content
+           width, and the range-slider tick labels alone demand ~580px — which
+           is what used to blow the parameter column out past the plot. */
+        min-width: 0;
+        min-height: 0;
+      }
+
+      /* Keep sliders inside the column and drop the dense tick labels, which
+         are unreadable at this width anyway (the handle shows the value). */
+      .analysis-side .irs { width: 100%; }
+      .analysis-side .irs-grid { display: none; }
+      .analysis-side .irs-with-grid { padding-bottom: 0; }
+
+      .analysis-main {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      /* The scrollable parameter list: takes whatever height is left over. */
+      .param-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+
+      .plot-card {
+        flex: 1 1 auto;
+        min-height: 320px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .plot-card > div,
+      .plot-card > .shiny-plot-output {
+        flex: 1 1 auto;
+        min-height: 0;
         width: 100%;
       }
-      
+
+      /* Pre-rendered PNGs (beta boxplot, CNV) scale to the card instead of
+         overflowing it at their native size. */
+      .plot-card img {
+        max-width: 100%;
+        max-height: 100%;
+        height: auto;
+        object-fit: contain;
+      }
+
+      /* Tabbed views (differential, CNV) must pass the height down too. */
+      .analysis-main > .tabbable,
+      .analysis-main .tab-content {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      .analysis-main .tab-content > .tab-pane.active {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      /* Compact the control column so more parameters fit without scrolling,
+         and stop the scrollbar shifting content sideways as it appears. */
+      .param-panel { scrollbar-gutter: stable; }
+
+      .analysis-side .card { padding: 0.75rem !important; }
+
+      .analysis-side .shiny-input-container,
+      .analysis-side .form-group {
+        width: 100% !important;
+        margin-bottom: 0.6rem;
+        min-width: 0;
+      }
+
+      .analysis-side label,
+      .analysis-side .control-label {
+        margin-bottom: 0.15rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+      }
+
+      .analysis-side .form-control,
+      .analysis-side .selectize-input,
+      .analysis-side .form-select {
+        font-size: 0.85rem;
+        padding-top: 0.25rem;
+        padding-bottom: 0.25rem;
+        min-height: 0;
+      }
+
+      /* Sidebar: keep the file picker inside 250px instead of clipping its
+         filename field. */
+      .pa-sidebar .shiny-input-container { width: 100% !important; }
+      .pa-sidebar .input-group { flex-wrap: nowrap; }
+      .pa-sidebar .form-control {
+        font-size: 0.78rem;
+        min-width: 0;
+        text-overflow: ellipsis;
+      }
+      .pa-sidebar .btn-file { white-space: nowrap; }
+
       .btn:disabled {
         opacity: 0.6;
         cursor: not-allowed;
@@ -79,14 +223,13 @@ primary_analysis_ui <- function(id) {
     ")),
     
     div(
-      class = "d-flex",
-      style = "min-height: calc(100vh - var(--main-offset))",
-      
+      class = "d-flex pa-shell",
+
       # --- SIDEBAR NAVIGATION ---
       div(
         id = ns("sidebar"),
-        class = "bg-light border-right p-3",
-        style = "width: var(--sidebar-width); overflow-y: auto; box-shadow: 0 0 10px rgba(0,0,0,0.1);",
+        class = "bg-light border-right p-3 pa-sidebar",
+        style = "box-shadow: 0 0 10px rgba(0,0,0,0.1);",
         
         h4("Primary Analysis", class = "mb-4 text-center"),
         
@@ -121,7 +264,7 @@ primary_analysis_ui <- function(id) {
           ),
           actionButton(
             ns("nav_pca"),
-            "Principal Component Analyisis",
+            "Principal Component Analysis",
             class = "btn btn-outline-primary w-100 text-start",
             style = "justify-content: flex-start;"
           ),
@@ -219,11 +362,11 @@ primary_analysis_ui <- function(id) {
       
       # --- MAIN CONTENT AREA ---
       div(
-        class = "flex-grow-1 p-4",
-        style = "overflow-y: auto; background-color: #f8f9fa;",
+        class = "flex-grow-1 p-4 pa-main",
+        style = "background-color: #f8f9fa;",
         # Title
-        div(style = "margin-bottom: 30px;",
-            h2(textOutput(ns("view_title")), class = "mb-3"), hr()
+        div(class = "pa-title",
+            h2(textOutput(ns("view_title")), class = "mb-2"), hr(class = "mt-2 mb-3")
         ),
         
         # --- BETA MATRIX VIEW ---

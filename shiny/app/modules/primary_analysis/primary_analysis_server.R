@@ -242,8 +242,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           list(
             src = boxplot_path,
             contentType = "image/png",
-            width = 1000,
-            height = 650
+            width = "100%"
           )
         }, deleteFile = FALSE)
       }
@@ -354,7 +353,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
       })
-    }, height = 750, width = 1200)
+    })
     
     output$mds_download_png <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
@@ -458,7 +457,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
         )
       })
-    }, height = 750, width = 1200)
+    })
     
     output$pca_download_png <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
@@ -719,7 +718,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         })
       }
       
-    }, height = 750, width = 1200)
+    })
     
     # Download handlers
     output$umap_download_png <- downloadHandler(
@@ -864,7 +863,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         padding                = grid::unit(c(10, 10, 10, 10), "mm")
       )
       removeNotification("ht_render")
-    }, height = 750, width = 1000)
+    })
     
     # Download handlers — notify user since redraw is needed for base graphics
     output$heatmap_download_png <- downloadHandler(
@@ -1052,7 +1051,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # Plot output - just renders the cached plot
     output$global_met_plot <- renderPlot({
       req(cached_global_met_plot())
-    }, height = 750, width = 1200)
+    })
     
     # Download handlers using cached plot
     output$global_met_download_png <- downloadHandler(
@@ -1384,7 +1383,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           shiny::need(FALSE, paste0("Error rendering density plot: ", error_msg))
         )
       })
-    }, height = 650, width = 1000)
+    })
     
     # DMP table
     output$diff_met_dmp_table <- DT::renderDataTable({
@@ -1662,8 +1661,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       list(
         src = cached_pileup_png(),
         contentType = "image/png",
-        width = 1000,
-        height = 650
+        width = "100%"
       )
     }, deleteFile = FALSE)
     
@@ -1767,8 +1765,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       list(
         src = cached_sample_png(),
         contentType = "image/png",
-        width = 1000,
-        height = 650
+        width = "100%"
       )
     }, deleteFile = FALSE)
     

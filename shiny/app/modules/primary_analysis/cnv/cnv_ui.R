@@ -1,12 +1,11 @@
 # Module UI function
 cnv_ui <- function(ns) {
   div(
-    class = "d-flex gap-3 mt-3",
-    style = "align-items: flex-start;",
+    class = "analysis-row",
     
     # LEFT PANEL
     div(
-      style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
+      class = "analysis-side",
       
       # ---- TOP ACTION BAR ----
       div(
@@ -136,8 +135,7 @@ cnv_ui <- function(ns) {
     # RIGHT PANEL — tabset with pile-up and per-sample views
     # ================================================================
     div(
-      class = "flex-grow-1",
-      style = "min-width: 0; display: flex; flex-direction: column;",
+      class = "analysis-main",
       
       tabsetPanel(
         id   = ns("cnv_tabset"),
@@ -192,8 +190,7 @@ cnv_ui <- function(ns) {
             
             # Per-sample plot area
             div(
-              class = "flex-grow-1",
-              style = "min-width: 0;",
+              class = "analysis-main",
               div(
                 class = "card p-3 plot-card",
                 style = "height: calc(100vh - 200px);",
