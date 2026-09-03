@@ -229,7 +229,7 @@ server <- function(input, output, session) {
   load_data_return <- load_data_server("load_data", DIRS, cfg)
   
   # Server also initialized at start
-  primary_analysis_server("primary_analysis", load_data_return, DIRS, APP_CACHE)
+  primary_analysis_server("primary_analysis", load_data_return, DIRS, APP_CACHE, cfg)
   
   # Simple view switching — just show/hide
   observeEvent(load_data_return$beta_merged_ld(), {

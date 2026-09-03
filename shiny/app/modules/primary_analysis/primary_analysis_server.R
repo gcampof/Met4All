@@ -9,7 +9,7 @@ source("modules/primary_analysis/differential/differential_utils.R")
 source("modules/primary_analysis/cnv/cnv_utils.R")
 source("modules/primary_analysis/samplesheet_ui.R")
 
-primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
+primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
@@ -1083,30 +1083,73 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- DIFFERENTIAL METHYLATION LOGIC ---
     # Use eventReactive directly
-    diff_met_data <- eventReactive(input$diff_met_run_analysis, {
-      req(beta_merged(), targets_merged(), input$diff_met_id_col, APP_CACHE())
-      
-      showNotification("Running differential methylation analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        result <- prepare_differential_methylation_data(
-          beta_merged(), 
-          targets_merged(), 
-          APP_CACHE()$built_annot,
-          input$diff_met_id_col,
-          input$diff_met_comparison_col,
-          input$diff_met_baseline,
-          input$diff_met_comparison
-        )
-        result
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, HTML(paste0("Error preparing differential methylation data: ", error_msg)))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
+    # The whole differential pipeline runs in one worker job: every step needs
+    # beta_diff, which is the largest object here and must not cross back.
+    diff_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_differential_analysis", args, app_dir)
+    })
+
+    # Path to the beta matrix on disk. beta_merged is only ever assigned at load
+    # time, so the file and the reactive cannot diverge; targets, by contrast, is
+    # edited in-session and is therefore passed by value.
+    beta_rds_path <- reactive({
+      file.path(DIRS$beta, "merged", "beta_merged.rds")
+    })
+
+    observeEvent(input$diff_met_run_analysis, {
+      req(beta_merged(), targets_merged(), input$diff_met_id_col)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running differential methylation analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      diff_task$invoke(
+        args = list(
+          beta_path      = beta_rds_path(),
+          targets        = targets_merged(),
+          cache_dir      = DIRS$cache,
+          pathways_dir   = DIRS$pathways,
+          annotation_pkg = cfg$annotation_pkg,
+          gene_set       = cfg$gene_set,
+          palette_dir    = DIRS$custom_color_palette,
+          palette_name   = input$diff_met_color_palette,
+          id_col         = input$diff_met_id_col,
+          comparison_col = input$diff_met_comparison_col,
+          baseline       = input$diff_met_baseline,
+          comparison     = input$diff_met_comparison,
+          with_champ     = isTRUE(input$diff_met_run_champ),
+          fdr_max        = DIFF_FDR_MAX,
+          out_dir        = DIRS$differential
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(diff_task$status(), "running")) {
+        shinyjs::disable("diff_met_run_analysis")
+      } else {
+        shinyjs::enable("diff_met_run_analysis")
+      }
+    })
+
+    diff_met_data <- reactive({
+      status <- diff_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "Differential methylation analysis running..."))
+      tryCatch(
+        diff_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error preparing differential methylation data: ",
+                                      conditionMessage(e))))
+          NULL
+        }
+      )
+    })
     
     # Dynamic Export Buttons based on active tab
     output$diff_met_export_buttons <- renderUI({
@@ -1368,112 +1411,73 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }
     )
     
-    # Density plot render
-    output$diff_met_density_plot <- renderPlot({
-      req(diff_met_data())
-      tryCatch({
-        plot_diff_methylation_density(
-          diff_met_data = diff_met_data(),
-          color_palette = PALETTES()$all_palettes[[input$diff_met_color_palette]],
-          DIRS$differential
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering density plot: ", error_msg))
-        )
-      })
+    # All of these now read from the single worker result. The FDR / logFC / row
+    # sliders are pure post-filters: the fit already ran once at DIFF_FDR_MAX, so
+    # moving a slider re-filters a table instead of re-running limma or ChAMP.
+    diff_filtered_dmps <- reactive({
+      res <- diff_met_data()
+      dmps <- res$dmps_all
+      req(is.data.frame(dmps))
+      if (nrow(dmps) == 0) return(dmps)
+
+      fdr_col <- intersect(c("adj.P.Val", "adj.P.value", "adjPVal", "FDR"), names(dmps))
+      if (length(fdr_col) > 0) {
+        dmps <- dmps[!is.na(dmps[[fdr_col[1]]]) & dmps[[fdr_col[1]]] <= input$diff_met_fdr_cut, ,
+                     drop = FALSE]
+      }
+      if ("logFC" %in% names(dmps)) {
+        dmps <- dmps[abs(dmps$logFC) > input$diff_met_lfc_cut, , drop = FALSE]
+      }
+      dmps
     })
-    
+
+    # Density plot render (produced by the worker; shown as the saved PNG)
+    output$diff_met_density_plot <- renderImage({
+      res <- diff_met_data()
+      validate(need(!is.null(res$density_png) && file.exists(res$density_png),
+                    "Density plot not available."))
+      list(src = res$density_png, contentType = "image/png", width = "100%")
+    }, deleteFile = FALSE)
+
     # DMP table
     output$diff_met_dmp_table <- DT::renderDataTable({
-      req(diff_met_data(), input$diff_dmps_top_cpgs, input$diff_met_fdr_cut, input$diff_met_lfc_cut)
-      tryCatch({
-        dmps <- get_dmps(diff_met_data(), 
-                         input$diff_met_fdr_cut,
-                         input$diff_met_lfc_cut,
-                         input$diff_met_run_champ,
-                         DIRS$differential)
-        if(nrow(dmps) > 0){
-          make_dt(head(dmps, input$diff_dmps_top_cpgs))
-        } else {
-          make_dt(dmps)
-        }
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMP table: ", error_msg))
-        )
-      })
+      req(input$diff_dmps_top_cpgs)
+      dmps <- diff_filtered_dmps()
+      if (nrow(dmps) > 0) {
+        make_dt(head(dmps, input$diff_dmps_top_cpgs))
+      } else {
+        make_dt(dmps)
+      }
     })
-    
+
     # DMR table
     output$diff_met_dmr_table <- DT::renderDataTable({
-      req(diff_met_data())
-      tryCatch({
-        dmrs <- get_dmrs(diff_met_data(), input$diff_met_run_champ, DIRS$differential)
-        make_dt(dmrs)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMR table: ", error_msg))
-        )
-      })
+      res <- diff_met_data()
+      validate(need(isTRUE(res$with_champ),
+                    "DMRs can only be calculated when 'Run ChAMP' is activated."))
+      make_dt(res$dmrs)
     })
-    
+
     # DMG table
     output$diff_met_dmg_table <- DT::renderDataTable({
-      req(diff_met_data())
-      tryCatch({
-        dmgs <- get_dmgs(diff_met_data(), input$diff_met_lfc_cut, DIRS$differential)
-        make_dt(dmgs)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMG table: ", error_msg))
-        )
-      })
+      dmgs <- diff_met_data()$dmgs
+      if (is.data.frame(dmgs) && nrow(dmgs) > 0 && "logFC" %in% names(dmgs)) {
+        dmgs <- dmgs[abs(dmgs$logFC) > input$diff_met_lfc_cut, , drop = FALSE]
+      }
+      make_dt(dmgs)
     })
-    
-    
+
     # FGSEA tables
     output$diff_met_fgsea_gobp_table <- DT::renderDataTable({
-      req(diff_met_data(),APP_CACHE())
-      tryCatch({
-        fgsea_gobp <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "gobp", DIRS$differential)
-        make_dt(fgsea_gobp)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA GOBP results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$gobp)
     })
-    
+
     output$diff_met_fgsea_kegg_table <- DT::renderDataTable({
-      req(diff_met_data(), APP_CACHE())
-      tryCatch({
-        fgsea_kegg <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "kegg", DIRS$differential)
-        make_dt(fgsea_kegg)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA KEGG results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$kegg)
     })
-    
+
     output$diff_met_fgsea_hallmark_table <- DT::renderDataTable({
-      req(diff_met_data(), APP_CACHE())
-      tryCatch({
-        fgsea_hallmark <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "hallmark", DIRS$differential)
-        make_dt(fgsea_hallmark)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA HALLMARK results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$hallmark)
     })
     
     

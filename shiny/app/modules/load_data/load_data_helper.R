@@ -1280,7 +1280,12 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   
   # Convert to matrix
   beta <- as.matrix(beta)
-  
+
+  # Analysis workers load the beta matrix from disk rather than receiving it over
+  # the process boundary, so both ingest paths must leave an .rds behind (the
+  # IDAT path already writes one in merge_beta_matrix_from_disk).
+  saveRDS(beta, file.path(merged_dir, "beta_merged.rds"))
+
   removeNotification(notification_id)
   notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=3)
   

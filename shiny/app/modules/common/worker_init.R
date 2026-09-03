@@ -27,10 +27,25 @@ m4a_worker_init <- function(app_dir) {
 
   suppressPackageStartupMessages({
     source("modules/common/all_imports.R")
+
+    # all_imports.R covers the Bioconductor stack only. These are attached by
+    # app.R in the main process, which a worker never runs — without them
+    # tidy_fgsea() (%>% and dplyr) and the xlsx writers fail here.
+    library(dplyr)
+    library(tibble)
+    library(data.table)
+    library(matrixStats)
+    library(openxlsx)
+    library(ggplot2)
+    library(RColorBrewer)
+    library(viridis)
+    library(colorspace)
+
     source("modules/common/utils.R")
     source("modules/primary_analysis/annotations.R")
     source("modules/primary_analysis/utils.R")
     source("modules/primary_analysis/cnv/cnv_utils.R")
+    source("modules/primary_analysis/differential/differential_utils.R")
   })
 
   assign(".m4a_worker_ready", TRUE, envir = globalenv())
