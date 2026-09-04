@@ -206,38 +206,41 @@ docker compose -f docker-compose.dev.yml up -d --build rstudio
 
 ### Running for Multiple Users
 
-A single instance already handles several users at once: long analyses (IDAT QC,
-beta-matrix generation, differential methylation, CNV, consensus clustering) run
-in a bounded pool of worker processes, so one user's analysis no longer freezes
-everyone else's session. Two settings control it:
+Met4All is designed to be shared. Several people can use the same instance at
+the same time: the long steps (IDAT import and QC, beta-matrix generation,
+differential methylation, CNV, consensus clustering) run in separate worker
+processes, so one person's analysis does not freeze anyone else's session. While
+an analysis runs you see a progress bar with the current step, and if more
+analyses are requested than there are workers, the extra ones queue and start
+automatically.
+
+You can tune this with environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `M4A_MAX_JOBS` | 2 | Concurrent analyses per instance. Extra requests queue, and the user is told their position. |
-| `M4A_THREADS_PER_JOB` | 2 | Threads inside each analysis. Keep `MAX_JOBS x THREADS_PER_JOB` within the host's cores. |
-| `M4A_MIN_FREE_GB` | 15 | Refuse to start an analysis with less free disk than this. |
+| `M4A_MAX_JOBS` | 2 | How many analyses run at the same time. Extra ones queue, and the user is told their position. |
+| `M4A_THREADS_PER_JOB` | 2 | Threads used inside each analysis. Keep `MAX_JOBS x THREADS_PER_JOB` within the number of cores on the machine. |
+| `M4A_MIN_FREE_GB` | 15 | Refuse to start an analysis if there is less free disk space than this. |
 
-Measured on 800k probes x 70 samples, a worker peaks at **~3 GB** for most
-analyses and **~9.5 GB** for differential methylation, which sets the ceiling.
-The app process itself stays under 0.5 GB. Allow roughly **0.5 GB plus 3 GB per
-concurrent analysis**, or **0.5 GB plus 10 GB** if users run differential
-concurrently, and **7-13 GB of scratch disk per analysis**.
+Each running analysis needs its own memory, so raising `M4A_MAX_JOBS` needs a
+machine with proportionally more RAM than the requirements above.
 
-The default of 2 concurrent analyses fits in 24 GB. Raising `M4A_MAX_JOBS`
-beyond that needs proportionally more RAM.
+Analyses keep running if you close the tab. The address in your browser bar
+identifies your analysis, so you can come back to it later and pick up where you
+left off.
 
-If one machine is not enough, `docker-compose.scale.yml` runs several instances
-behind a reverse proxy with no code or image changes:
+#### Serving more people at once
+
+If a single machine is not enough, `docker-compose.scale.yml` runs several
+instances behind a reverse proxy, with no changes to the app or the image:
 
 ```bash
 docker compose -f docker-compose.scale.yml up -d --scale shiny=4
 ```
 
-The app is served on the same **http://localhost:3838** (set `M4A_PORT` to change
-it). Sticky sessions are configured and required — session state lives in the R
-process that served the page — and are handled automatically by the proxy.
-
-Docker Swarm and Kubernetes are not needed for either mode.
+The app is served on the same **http://localhost:3838** (set `M4A_PORT` to
+change it). Users are kept on the instance that served them, which the proxy
+handles automatically — no extra configuration needed.
 
 ### Publishing a New Image to DockerHub
 
