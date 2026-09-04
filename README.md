@@ -134,6 +134,7 @@ docker logs m4a-shiny
 .
 ├── docker-compose.dev.yml
 ├── docker-compose.prod.yml
+├── docker-compose.scale.yml
 ├── rstudio/
 │   └── Dockerfile
 └── shiny/
@@ -202,6 +203,36 @@ docker compose -f docker-compose.dev.yml up -d --build shiny
 # RStudio only
 docker compose -f docker-compose.dev.yml up -d --build rstudio
 ```
+
+### Running for Multiple Users
+
+A single instance already handles several users at once: long analyses (IDAT QC,
+beta-matrix generation, differential methylation, CNV, consensus clustering) run
+in a bounded pool of worker processes, so one user's analysis no longer freezes
+everyone else's session. Two settings control it:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `M4A_MAX_JOBS` | 2 | Concurrent analyses per instance. Extra requests queue, and the user is told their position. |
+| `M4A_THREADS_PER_JOB` | 2 | Threads inside each analysis. Keep `MAX_JOBS x THREADS_PER_JOB` within the host's cores. |
+| `M4A_MIN_FREE_GB` | 15 | Refuse to start an analysis with less free disk than this. |
+
+Allow roughly **2 GB of RAM plus 5 GB per concurrent analysis**, and **7-13 GB of
+scratch disk per analysis** (a 70-sample EPIC + 450k run is at the top of that
+range). The default of 2 concurrent analyses fits comfortably in 24 GB.
+
+If one machine is not enough, `docker-compose.scale.yml` runs several instances
+behind a reverse proxy with no code or image changes:
+
+```bash
+docker compose -f docker-compose.scale.yml up -d --scale shiny=4
+```
+
+The app is served on the same **http://localhost:3838** (set `M4A_PORT` to change
+it). Sticky sessions are configured and required — session state lives in the R
+process that served the page — and are handled automatically by the proxy.
+
+Docker Swarm and Kubernetes are not needed for either mode.
 
 ### Publishing a New Image to DockerHub
 

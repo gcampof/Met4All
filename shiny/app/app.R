@@ -196,6 +196,14 @@ server <- function(input, output, session) {
   # them when the session ends.
   register_analysis_dir(DIRS$analysis, session)
 
+  # Keep the heartbeat fresh. The in-process registry only protects this replica;
+  # the heartbeat file is what stops a second replica sharing the data volume from
+  # sweeping a session that has been running longer than the cleanup window.
+  observe({
+    invalidateLater(30 * 60 * 1000)
+    touch_analysis_dir(DIRS$analysis)
+  })
+
   APP_CACHE <- reactiveVal(NULL)
   
   # Flags

@@ -1,0 +1,69 @@
+# Multi-user deployment: several Met4All instances behind a reverse proxy.
+#
+# Only needed when one instance is not enough. The default single-instance setup
+# (docker-compose.prod.yml) already runs analyses in a bounded worker pool, so
+# one user's job no longer blocks another's session; use this when you want more
+# concurrent analyses than one machine's worker pool provides.
+#
+#   docker compose -f docker-compose.scale.yml up -d --scale shiny=4
+#
+# Then open http://localhost:3838 as usual. Set M4A_PORT to use another port.
+#
+# Sizing: each instance needs roughly 2 GB plus 5 GB per concurrent analysis
+# (M4A_MAX_JOBS), and ~7-13 GB of scratch disk per analysis.
+
+# Its own Compose project, so bringing this stack up or down never touches the
+# containers from docker-compose.dev.yml / docker-compose.prod.yml, which would
+# otherwise share the default project name taken from this directory.
+name: met4all-scale
+
+services:
+  proxy:
+    # 3.7+ is required: older 3.x pin Docker API 1.24, which Docker 25 and later
+    # refuse, leaving the proxy with no backends and every request a 404.
+    image: traefik:v3.7
+    container_name: m4a-proxy
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:3838
+      # Shiny holds a WebSocket open for the life of a session, and an analysis
+      # can run for tens of minutes without traffic on it. Disable the idle and
+      # read timeouts so long jobs are not cut off mid-run.
+      - --entrypoints.web.transport.respondingTimeouts.readTimeout=0
+      - --entrypoints.web.transport.respondingTimeouts.idleTimeout=0
+    ports:
+      - "${M4A_PORT:-3838}:3838"
+    volumes:
+      # Read-only: Traefik only needs to discover the shiny containers.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  shiny:
+    # Override with M4A_IMAGE to scale a locally built image instead.
+    image: ${M4A_IMAGE:-gcampof/methylation4all-shiny:1.0.1}
+    # Deliberately no container_name and no host port mapping: both make the
+    # service impossible to scale, because the name and the port would collide
+    # between replicas. The proxy above is what is published instead.
+    volumes:
+      - ./shiny/logs:/var/log/shiny-server
+      - ./shiny/app/data:/srv/shiny-server/data
+    environment:
+      - R_CONFIG_ACTIVE=default
+      # Per instance. Keep MAX_JOBS * THREADS_PER_JOB within one instance's share
+      # of the host's cores.
+      - M4A_MAX_JOBS=2
+      - M4A_THREADS_PER_JOB=2
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.m4a.rule=PathPrefix(`/`)
+      - traefik.http.routers.m4a.entrypoints=web
+      - traefik.http.services.m4a.loadbalancer.server.port=3838
+      # Sticky sessions are required, not an optimisation. Session state lives in
+      # the R process that served the page, and download links plus the SockJS
+      # polling fallback are ordinary HTTP requests that must reach that same
+      # instance.
+      - traefik.http.services.m4a.loadbalancer.sticky.cookie=true
+      - traefik.http.services.m4a.loadbalancer.sticky.cookie.name=m4a_instance
+      - traefik.http.services.m4a.loadbalancer.sticky.cookie.httponly=true
+    restart: unless-stopped
