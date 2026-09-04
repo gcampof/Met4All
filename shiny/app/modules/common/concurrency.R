@@ -173,8 +173,19 @@ m4a_queue_message <- function() {
 #
 # Falls back to running in-process when no pool is available, so behaviour is
 # unchanged (just blocking) on an image built without mirai.
-m4a_submit <- function(fn_name, args, app_dir = getwd()) {
+# `session_dir` is this analysis's directory. It is where the worker publishes
+# progress and where its log is written, so the user can watch a long run and
+# download what it printed afterwards.
+m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL) {
   stopifnot(is.character(fn_name), length(fn_name) == 1L, is.list(args))
+
+  log_file <- if (!is.null(session_dir)) {
+    d <- file.path(session_dir, "logs")
+    dir.create(d, showWarnings = FALSE, recursive = TRUE)
+    file.path(d, "analysis.log")
+  } else {
+    NULL
+  }
 
   if (m4a_ensure_workers()) {
     return(mirai::mirai(
@@ -185,14 +196,37 @@ m4a_submit <- function(fn_name, args, app_dir = getwd()) {
         # not evaluated in a child of globalenv, so the lookup must be explicit —
         # otherwise this fails with "could not find function".
         get("m4a_worker_init", envir = globalenv())(app_dir)
+
+        # Where m4a_progress() should publish to, for this task only.
+        options(m4a.progress_dir = session_dir)
+
+        # Capture what the analysis prints into this analysis's own log. sink()
+        # is process-global, which is exactly why it must never be used in the
+        # shared app process -- but a worker handles one task at a time, so here
+        # it is safe and gives the user a downloadable record.
+        if (!is.null(log_file)) {
+          con <- file(log_file, open = "a")
+          writeLines(paste0("=== ", format(Sys.time()), "  ", fn_name, " ==="), con)
+          sink(con, type = "message")
+          sink(con, type = "output", split = FALSE)
+          on.exit({
+            for (ty in c("output", "message")) {
+              if (sink.number(type = ty) > 0) sink(type = ty)
+            }
+            close(con)
+          }, add = TRUE)
+        }
+
         # Resolve to the function object before calling. Passing the name to
         # do.call() relies on lookup rules that do not hold inside a mirai
         # expression, which surfaces as "could not find function".
         fun <- get(fn_name, envir = globalenv(), mode = "function")
         do.call(fun, args)
       },
-      fn_name = fn_name,
-      args    = args,
+      fn_name     = fn_name,
+      args        = args,
+      session_dir = session_dir,
+      log_file    = log_file,
       app_dir = app_dir
     ))
   }
@@ -206,4 +240,138 @@ m4a_submit <- function(fn_name, args, app_dir = getwd()) {
   } else {
     promises::promise_resolve(outcome)
   }
+}
+
+
+# --- Progress reporting -----------------------------------------------------
+# A worker cannot talk to a session: there is none, and a mirai returns a single
+# value only when it finishes. So progress goes through the filesystem, the same
+# hand-off the analyses already use. The worker writes a tiny file, the main
+# process polls it and updates the UI.
+#
+# The destination is set per task by m4a_submit(), so analysis functions just
+# call m4a_progress() without having to thread a directory through every
+# signature.
+
+m4a_progress_path <- function(dir) file.path(dir, ".m4a_progress.rds")
+
+# Worker-side. Cheap enough to call between steps of a long analysis.
+m4a_progress <- function(value, total, detail = "") {
+  dir <- getOption("m4a.progress_dir")
+  if (is.null(dir) || !nzchar(dir) || !dir.exists(dir)) return(invisible(NULL))
+
+  tryCatch({
+    target <- m4a_progress_path(dir)
+    tmp    <- paste0(target, ".tmp")
+    saveRDS(list(value = value, total = total, detail = detail, at = Sys.time()), tmp)
+    # Write-then-rename so a reader polling mid-write never sees a partial file.
+    file.rename(tmp, target)
+  }, error = function(e) NULL)
+
+  invisible(NULL)
+}
+
+# Main-process side.
+m4a_read_progress <- function(dir) {
+  if (is.null(dir)) return(NULL)
+  p <- m4a_progress_path(dir)
+  if (!file.exists(p)) return(NULL)
+  tryCatch(readRDS(p), error = function(e) NULL)
+}
+
+m4a_clear_progress <- function(dir) {
+  if (!is.null(dir)) unlink(m4a_progress_path(dir), force = TRUE)
+  invisible(NULL)
+}
+
+# Percentage for a progress bar, or NULL when the analysis has not said yet.
+m4a_progress_pct <- function(p) {
+  if (is.null(p) || is.null(p$total) || is.na(p$total) || p$total <= 0) return(NULL)
+  max(0, min(100, round(100 * p$value / p$total)))
+}
+
+
+# --- Progress UI -------------------------------------------------------------
+# A live progress panel for a running analysis. This only works because the
+# analysis is in a worker: the main process is free to keep flushing updates to
+# the browser. While everything ran inline, withProgress() and friends could
+# never appear, because Shiny only sends messages between reactive cycles and a
+# blocking call never reaches the end of one.
+
+m4a_progress_output <- function(ns, id = "m4a_progress") {
+  shiny::uiOutput(ns(id))
+}
+
+# Renders the panel and keeps it refreshed. `task` is an ExtendedTask,
+# `session_dir` the analysis directory the worker publishes into.
+m4a_render_progress <- function(output, session, task, session_dir,
+                                id = "m4a_progress", poll_ms = 1000) {
+  output[[id]] <- shiny::renderUI({
+    status <- task$status()
+    if (!identical(status, "running")) return(NULL)
+
+    # Re-read while the job runs; this is what makes the bar move.
+    shiny::invalidateLater(poll_ms, session)
+
+    p   <- m4a_read_progress(session_dir)
+    pct <- m4a_progress_pct(p)
+    detail <- if (!is.null(p) && nzchar(p$detail)) p$detail else "Starting..."
+
+    # Before the first checkpoint there is nothing to measure, so show an
+    # indeterminate bar rather than a fake 0%.
+    bar_style <- if (is.null(pct)) {
+      "width:100%; background-image:linear-gradient(45deg,rgba(255,255,255,.2) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.2) 75%,transparent 75%,transparent); background-size:1rem 1rem;"
+    } else {
+      paste0("width:", pct, "%;")
+    }
+
+    shiny::div(
+      class = "card p-3 mb-3",
+      style = "border-left: 3px solid #0d6efd;",
+      shiny::div(
+        class = "d-flex justify-content-between align-items-center mb-2",
+        shiny::span(shiny::icon("spinner", class = "fa-spin"), " ", detail,
+                    style = "font-size: 0.9rem;"),
+        shiny::span(if (is.null(pct)) "" else paste0(pct, "%"),
+                    class = "text-muted", style = "font-size: 0.85rem;")
+      ),
+      shiny::div(
+        class = "progress", style = "height: 8px;",
+        shiny::div(class = "progress-bar", role = "progressbar", style = bar_style)
+      ),
+      shiny::div(
+        class = "text-muted mt-2",
+        style = "font-size: 0.75rem;",
+        "You can leave this page open, or come back later using the address in your browser bar."
+      )
+    )
+  })
+}
+
+
+# --- Log download ------------------------------------------------------------
+# Workers append what they print to <analysis_dir>/logs/analysis.log (see
+# m4a_submit). This hands that file to the user so they can see what happened
+# without needing access to the server.
+m4a_log_download_handler <- function(session_dir, analysis_id = NULL) {
+  shiny::downloadHandler(
+    filename = function() {
+      paste0("met4all_log_",
+             if (is.null(analysis_id)) format(Sys.Date()) else analysis_id, ".txt")
+    },
+    content = function(file) {
+      log_file <- file.path(session_dir, "logs", "analysis.log")
+      if (file.exists(log_file)) {
+        file.copy(log_file, file)
+      } else {
+        writeLines(
+          c("No analysis log yet.",
+            "",
+            "This file records what each analysis prints while it runs.",
+            "It fills in once you start an analysis."),
+          file
+        )
+      }
+    }
+  )
 }

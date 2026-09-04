@@ -26,6 +26,7 @@ prepare_cnv_data <- function(
   if (is.null(bed_path) || !nzchar(bed_path)) stop("Please upload a BED file")
   if (!file.exists(bed_path)) stop("Selected BED file does not exist on disk")
 
+  m4a_progress(0, 5, "Loading methylation set")
   message("[cnv] Preparing CNV data...")
   
   # Fixed values
@@ -54,6 +55,7 @@ prepare_cnv_data <- function(
   cnv_ctrl <- CNV.load(mset_ctrl)
   cnv_case <- CNV.load(mset_case)
   
+  m4a_progress(1, 5, "Reading regions from the BED file")
   message("[cnv] Reading regions from BED file...")
   detail_regions <- rtracklayer::import(bed_path, format = "bed")
   # Building the bin annotation takes 1-2 minutes and depends only on the array,
@@ -73,6 +75,7 @@ prepare_cnv_data <- function(
   }
 
   if (is.null(anno)) {
+    m4a_progress(2, 5, "Building the bin annotation (1-2 min)")
     message("[cnv] Creating annotation object...")
     anno <- conumee2::CNV.create_anno(
       detail_regions = detail_regions,
@@ -93,6 +96,7 @@ prepare_cnv_data <- function(
   anno_filtered <- anno
   anno_filtered@probes <- anno@probes[common_probes]
   
+  m4a_progress(3, 5, "Fitting and binning copy number")
   message("[cnv] Getting gene annotation for each bin...")
   
   x <- CNV.fit(cnv_case, cnv_ctrl, anno_filtered)
@@ -124,6 +128,7 @@ prepare_cnv_data <- function(
   
   x <- CNV.segment(x)
   
+  m4a_progress(5, 5, "Copy number analysis complete")
   message("[cnv] Finished processing data")
   
   x

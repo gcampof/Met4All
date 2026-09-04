@@ -445,23 +445,29 @@ run_differential_analysis <- function(
     fdr_max,
     out_dir
 ) {
+  n_steps <- if (isTRUE(with_champ)) 7L else 6L
+  m4a_progress(0, n_steps, "Loading beta matrix and annotation")
   beta  <- readRDS(beta_path)
   cache <- setup_cache(
     DIRS = list(cache = cache_dir, pathways = pathways_dir),
     cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
   )
 
+  m4a_progress(1, n_steps, "Summarising probes to genes")
   diff <- prepare_differential_methylation_data(
     beta, targets, cache$built_annot,
     id_col, comparison_col, baseline, comparison
   )
 
+  m4a_progress(2, n_steps, "Fitting differentially methylated positions")
   # Fitted once at the permissive end of the slider; filtered by the caller.
   dmps_all <- get_dmps(diff, fdr_cut = fdr_max, lfc_cut = 0,
                        with_champ = with_champ, out_dir = out_dir)
 
+  m4a_progress(3, n_steps, "Collecting differentially methylated genes")
   dmgs <- get_dmgs(diff, 0, out_dir)
 
+  m4a_progress(4, n_steps, "Running pathway enrichment (GO, KEGG, Hallmark)")
   fgsea <- list(
     gobp     = get_fgsea(diff, cache$pathways, "gobp", out_dir),
     kegg     = get_fgsea(diff, cache$pathways, "kegg", out_dir),
@@ -469,6 +475,7 @@ run_differential_analysis <- function(
   )
 
   # ChAMP DMRs are opt-in and by far the slowest step.
+  if (isTRUE(with_champ)) m4a_progress(5, n_steps, "Detecting DMRs with ChAMP (slow)")
   dmrs <- if (isTRUE(with_champ)) {
     tryCatch(get_dmrs(diff, TRUE, out_dir),
              error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
@@ -480,10 +487,13 @@ run_differential_analysis <- function(
   pal_fn   <- palettes$all_palettes[[palette_name]]
   if (is.null(pal_fn)) pal_fn <- palettes$all_palettes[[1]]
 
+  m4a_progress(n_steps - 1L, n_steps, "Drawing the density plot")
   density_png <- tryCatch(
     plot_diff_methylation_density(diff, pal_fn, out_dir),
     error = function(e) { warning("Density plot failed: ", conditionMessage(e)); NULL }
   )
+
+  m4a_progress(n_steps, n_steps, "Differential methylation complete")
 
   list(
     dmps_all         = dmps_all,

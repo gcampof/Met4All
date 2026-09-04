@@ -121,6 +121,17 @@ load_data_ui <- function(id) {
       
       # Message Alerts
       uiOutput(ns("alert_message")),
+
+      # If something fails during loading the user never reaches the analysis
+      # view, so the log has to be reachable from here too.
+      div(
+        class = "text-center mb-3",
+        downloadButton(
+          ns("download_log"),
+          "Download log",
+          class = "btn btn-sm btn-outline-secondary"
+        )
+      ),
       
       # Main view container
       div(
@@ -297,6 +308,10 @@ load_data_ui <- function(id) {
           id = ns("ld_loading_view"),
           class = "card shadow-lg text-center p-5",
           style = "max-width: 800px; margin: 0 auto; border-radius: 12px;",
+
+          # Live progress for IDAT QC and beta-matrix generation, the two
+          # longest steps in the app.
+          m4a_progress_output(ns),
           
           div(
             style = "display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 400px;",
@@ -565,13 +580,15 @@ load_data_server <- function(id, DIRS, cfg) {
     })
     
     
+    output$download_log <- m4a_log_download_handler(DIRS$analysis, DIRS$analysis_id)
+
     # --- RUN QC ---
     # The longest blocking step in the app (10-25 min for 70 EPIC samples) and it
     # runs on every IDAT analysis, so it goes to a worker. Only the samples table
     # goes in and a list of file paths comes back; the multi-GB RGChannelSets are
     # written straight to disk by the worker.
     qc_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("run_qc_ingest", args, app_dir)
+      m4a_submit("run_qc_ingest", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$run_qc, {
@@ -591,6 +608,13 @@ load_data_server <- function(id, DIRS, cfg) {
         ),
         app_dir = normalizePath(getwd())
       )
+    })
+
+    observe({
+      running <- Filter(function(t) identical(t$status(), "running"),
+                        list(qc_task, beta_task))
+      req(length(running) > 0)
+      m4a_render_progress(output, session, running[[1]], DIRS$analysis)
     })
 
     # Pick the result up when the worker finishes.
@@ -789,7 +813,7 @@ load_data_server <- function(id, DIRS, cfg) {
     # QC, one that runs on every IDAT analysis. The worker reads the RGChannelSets
     # QC left on disk and returns paths, not the ~450 MB matrix.
     beta_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("run_beta_generation", args, app_dir)
+      m4a_submit("run_beta_generation", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$qc_continue, {

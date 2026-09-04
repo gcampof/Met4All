@@ -354,8 +354,16 @@ primary_analysis_ui <- function(id) {
                 style = "justify-content: flex-start;",
                 disabled = TRUE
               )
+            ),
+            br(),
+            # Everything the analyses printed, for when something looks wrong.
+            downloadButton(
+              ns("download_log"),
+              "Analysis log (.txt)",
+              class = "btn btn-outline-secondary w-100 text-start",
+              style = "justify-content: flex-start;"
             )
-            
+
           ),
         )
       ),
@@ -368,6 +376,9 @@ primary_analysis_ui <- function(id) {
         div(class = "pa-title",
             h2(textOutput(ns("view_title")), class = "mb-2"), hr(class = "mt-2 mb-3")
         ),
+
+        # Live progress for whichever analysis this session is running.
+        m4a_progress_output(ns),
         
         # --- BETA MATRIX VIEW ---
         shinyjs::hidden(

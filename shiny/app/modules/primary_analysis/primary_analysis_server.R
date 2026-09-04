@@ -341,7 +341,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     cached_mds_plot <- reactiveVal(NULL)
     
     mds_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_mds_data", args, app_dir)
+      m4a_submit("prepare_mds_data", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$mds_run_analysis, {
@@ -450,7 +450,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # Prepare PCA data (only runs when trigger changes)
     pca_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_pca_data", args, app_dir)
+      m4a_submit("prepare_pca_data", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$pca_run_analysis, {
@@ -571,7 +571,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # Prepare UMAP data (only runs when trigger changes)
     umap_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_umap_data", args, app_dir)
+      m4a_submit("prepare_umap_data", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$umap_run_analysis, {
@@ -738,7 +738,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     })
 
     predict_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("predict_umap", args, app_dir)
+      m4a_submit("predict_umap", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(predict_task$status(), {
@@ -865,7 +865,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # Consensus clustering runs in a worker: it is the expensive half, and at the
     # top of the CpG slider the row dendrogram alone builds a ~800 MB matrix.
     heatmap_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_heatmap_cc", args, app_dir)
+      m4a_submit("prepare_heatmap_cc", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$heatmap_run_analysis, {
@@ -1095,7 +1095,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # Use eventReactive directly
     global_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_global_methylation", args, app_dir)
+      m4a_submit("prepare_global_methylation", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$global_met_run_analysis, {
@@ -1205,7 +1205,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # The whole differential pipeline runs in one worker job: every step needs
     # beta_diff, which is the largest object here and must not cross back.
     diff_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("run_differential_analysis", args, app_dir)
+      m4a_submit("run_differential_analysis", args, app_dir, session_dir = DIRS$analysis)
     })
 
     observeEvent(input$diff_met_run_analysis, {
@@ -1682,10 +1682,26 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # invoke() time below and passed by value. Only paths and scalars cross into
     # the worker; it reads the MethylSet from disk itself.
     cnv_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("prepare_cnv_data", args, app_dir)
+      m4a_submit("prepare_cnv_data", args, app_dir, session_dir = DIRS$analysis)
     })
 
+    output$download_log <- m4a_log_download_handler(DIRS$analysis, DIRS$analysis_id)
+
     app_dir <- normalizePath(getwd())
+
+    # One progress panel, driven by whichever task is running. Registered per
+    # task because each has its own status; only the running one renders.
+    for (tsk in c("mds_task", "pca_task", "umap_task", "predict_task",
+                  "heatmap_task", "global_task", "diff_task", "cnv_task")) {
+      local({
+        nm <- tsk
+        observe({
+          t <- get0(nm, inherits = TRUE)
+          req(!is.null(t), identical(t$status(), "running"))
+          m4a_render_progress(output, session, t, DIRS$analysis)
+        })
+      })
+    }
 
     observeEvent(run_analysis_trigger(), {
       req(run_analysis_trigger() > 0)

@@ -42,6 +42,7 @@ prepare_heatmap_cc <- function(
   top_cpgs <- min(top_cpgs, nrow(beta2))
   mat <- get_top_mad_probes(beta2, top_cpgs)
 
+  m4a_progress(0, 3, paste0("Consensus clustering (", cc_reps, " resamplings)"))
   message("[heatmap] Computing consensus clustering")
   cc <- ConsensusClusterPlus::ConsensusClusterPlus(
     as.matrix(mat),
@@ -56,6 +57,7 @@ prepare_heatmap_cc <- function(
     seed         = cc_seed
   )
 
+  m4a_progress(1, 3, "Clustering probes")
   message("[heatmap] Clustering rows")
   row_tree <- hclust(row_cor_dist(mat), method = "ward.D2")
 
@@ -85,6 +87,8 @@ prepare_heatmap_cc <- function(
     setNames(base_colors[seq_len(n_needed)], vals)
   })
   names(anno_colors) <- valid_cols
+
+  m4a_progress(3, 3, "Clustering complete")
 
   list(mat = mat, cc = cc, targets2 = targets2,
        anno_df = anno_df, anno_colors = anno_colors, row_tree = row_tree)

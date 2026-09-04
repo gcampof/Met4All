@@ -1294,9 +1294,11 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
 # step in the app and it runs on every IDAT analysis, so it is also the one that
 # matters most for keeping other users' sessions alive.
 run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_dir, qc_dir) {
+  m4a_progress(0, 3, "Separating unused IDATs")
   message("[qc] Separating unused IDATs")
   separate_unselected_idats(samples_df, selected_idats, preprocessing_dir)
 
+  m4a_progress(1, 3, "Reading the sample sheet")
   message("[qc] Loading sample sheet")
   parse_samplesheets(input_dir, preprocessing_dir)
 
@@ -1304,7 +1306,11 @@ run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_d
   # matters: without it unlink() silently refuses to remove a directory.
   unlink(file.path(input_dir, "*"), recursive = TRUE, force = TRUE)
 
-  load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir)
+  m4a_progress(2, 3, "Reading IDATs and building QC reports (the long step)")
+  res <- load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir)
+
+  m4a_progress(3, 3, "Quality control complete")
+  res
 }
 
 
@@ -1323,7 +1329,12 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
   beta_paths <- c()
   mset_paths <- list()
 
+  total_steps <- length(arrays) + 2L
+  step <- 0L
+
   for (array in arrays) {
+    m4a_progress(step, total_steps, paste0("Generating beta matrix for ", array))
+    step <- step + 1L
     message("[beta] === Processing beta for ", array, " ===")
     array_qc_dir <- file.path(qc_dir, array)
     thr <- as.numeric(thresholds[[array]])
@@ -1371,9 +1382,12 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
 
   beta_merge_dir <- create_dir(file.path(beta_dir, "merged"))
 
+  m4a_progress(step, total_steps, "Merging beta matrices")
+  step <- step + 1L
   message("[beta] Merging beta matrices from disk")
   merge_beta_matrix_from_disk(beta_paths, beta_merge_dir)
 
+  m4a_progress(step, total_steps, "Merging sample sheets")
   message("[beta] Merging sample sheets")
   targets_result <- merge_samplesheets(arrays, preprocessing_dir, beta_merge_dir)
 
@@ -1392,6 +1406,8 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
     beta_path    = beta_path,
     targets_path = targets_path
   )
+
+  m4a_progress(total_steps, total_steps, "Beta matrix ready")
 
   list(
     beta_path      = beta_path,
