@@ -425,7 +425,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
       })
-    })
+    }, res = 110)
     
     output$mds_download_png <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
@@ -545,7 +545,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
         )
       })
-    })
+    }, res = 110)
     
     output$pca_download_png <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
@@ -836,7 +836,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         })
       }
       
-    })
+    }, res = 110)
     
     # Download handlers
     output$umap_download_png <- downloadHandler(
@@ -992,7 +992,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         padding                = grid::unit(c(10, 10, 10, 10), "mm")
       )
       removeNotification("ht_render")
-    })
+    }, res = 110)
     
     # Download handlers — notify user since redraw is needed for base graphics
     output$heatmap_download_png <- downloadHandler(
@@ -1180,7 +1180,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # Plot output - just renders the cached plot
     output$global_met_plot <- renderPlot({
       req(cached_global_met_plot())
-    })
+    }, res = 110)
     
     # Download handlers using cached plot
     output$global_met_download_png <- downloadHandler(

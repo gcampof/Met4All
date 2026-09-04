@@ -393,7 +393,7 @@ load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
           role = "status",
           style = "width: 3rem; height: 3rem;"),
       p("This may take a moment...", class = "text-muted"),
-      p("Loading packages and cache...", class = "small text-muted")
+      p("Preparing the analysis workers...", class = "small text-muted")
     ),
     footer = NULL,
     easyClose = FALSE,
@@ -402,13 +402,17 @@ load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
   
   session$onFlushed(function() {
     tryCatch({
-      source("modules/common/all_imports.R", local = TRUE)
-      cache <- setup_cache(DIRS, cfg)
-      APP_CACHE(cache)
-
-      # Start the workers now, in the background, so the first analysis the user
-      # runs does not also pay for loading the stack.
-      try(m4a_warm_workers(getwd()), silent = TRUE)
+      # Deliberately NOT sourcing all_imports.R or building the annotation cache
+      # here any more. Both used to run in the shared app process, which froze
+      # every other connected session for ~26 s the first time anyone loaded
+      # data. Neither is needed here:
+      #   * every analysis now runs in a worker, which loads its own stack;
+      #   * the main process only calls Bioconductor through pkg:: , which
+      #     resolves the namespace on demand without attaching all 17 packages;
+      #   * APP_CACHE is no longer read anywhere in the main process.
+      # The workers are started in the background instead, so the cost is paid
+      # off the critical path and blocks nobody.
+      m4a_warm_workers(getwd())
 
       removeModal()
     }, error = function(e) {

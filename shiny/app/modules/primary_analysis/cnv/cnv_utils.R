@@ -153,7 +153,9 @@ plot_pile_up <- function(cnv_data, baseline, comparison, out_dir) {
     mtext(subtitle, side = 3, line = 0, cex = 0.75, col = "grey40")
   }
   
-  png(png_file, width = 1400, height = 750, res = 120)
+  # Rendered at ~2x: the UI shows this at width:100%, so a small PNG gets
+  # upscaled by the browser and looks soft next to the exported file.
+  png(png_file, width = 2800, height = 1500, res = 240)
   draw_pileup()
   dev.off()
   
@@ -191,7 +193,7 @@ plot_cnv_per_sample <- function(cnv_data, sample_name, baseline, comparison, out
   title <- paste("Genome Plot -", sample_name)
   
   # Save as PNG
-  png(png_file, width = 1000, height = 650, res = 100)
+  png(png_file, width = 2000, height = 1300, res = 200)
   conumee2::CNV.genomeplot(cnv_data[sample_idx], main = title)
   dev.off()
   

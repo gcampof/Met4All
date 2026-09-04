@@ -152,7 +152,8 @@ plot_diff_methylation_density <- function(diff_met_data, color_palette, out_dir)
   pdf_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".pdf"))
 
   tryCatch({
-    png(png_file, width = 1000, height = 800, res = 150)
+    # ~2x for the same reason as the CNV plots: shown at width:100%.
+    png(png_file, width = 2000, height = 1600, res = 300)
     on.exit(if (dev.cur() != 1L) dev.off(), add = TRUE)
     draw()
     dev.off()

@@ -343,11 +343,6 @@ m4a_render_progress <- function(output, session, task, session_dir,
       shiny::div(
         class = "progress", style = "height: 8px;",
         shiny::div(class = "progress-bar", role = "progressbar", style = bar_style)
-      ),
-      shiny::div(
-        class = "text-muted mt-2",
-        style = "font-size: 0.75rem;",
-        "You can leave this page open, or come back later using the address in your browser bar."
       )
     )
   })
