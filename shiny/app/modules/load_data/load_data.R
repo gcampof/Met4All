@@ -490,27 +490,19 @@ load_data_server <- function(id, DIRS, cfg) {
           
         } else if (type_selected() == "BETA") {
           removeNotification(notification_id)
-          notification_id <- showNotification("Extracting BETA files...", type="message", duration=0)
-          beta_and_targets <- extract_beta_and_targets(DIRS$input, DIRS$beta, notification_id)
-          # Only a descriptor is kept in memory. Every analysis reads the matrix
-          # from disk in a worker, so holding ~450 MB per connected session here
-          # bought nothing.
-          beta_merged(beta_descriptor(
-            file.path(DIRS$beta, "merged", "beta_merged.rds"), beta_and_targets$beta
-          ))
-          targets_merged(beta_and_targets$targets)
+          # Reading a full beta-matrix CSV takes minutes on a real dataset, so it
+          # goes to a worker like every other long step. The result is picked up
+          # by the observer on beta_task$status() below.
+          queued <- m4a_queue_message()
+          showNotification(
+            if (is.null(queued)) "Reading the beta matrix..." else queued,
+            type = "message", duration = 5
+          )
 
-          snapshot_analysis(DIRS, type = "BETA", array_names = NULL,
-                            mset_paths = list(), targets = beta_and_targets$targets)
-          
-          notification_id <- showNotification("Complete!", type="message", duration=3)
-          # Return only using beta and targets
-          return(list(
-            array_names_ld = array_names,
-            mSetSq_list_ld = mSetSq_list,
-            beta_merged_ld= beta_merged,
-            targets_merged_ld = targets_merged
-          ))
+          beta_upload_task$invoke(
+            args = list(input_dir = DIRS$input, beta_dir = DIRS$beta),
+            app_dir = normalizePath(getwd())
+          )
         }
         
         # Only hide loading and show next view on success
@@ -582,6 +574,38 @@ load_data_server <- function(id, DIRS, cfg) {
     
     output$download_log <- m4a_log_download_handler(DIRS$analysis, DIRS$analysis_id)
 
+    # Beta-matrix upload: the one long step on this path.
+    beta_upload_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("extract_beta_and_targets", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(beta_upload_task$status(), {
+      status <- beta_upload_task$status()
+
+      if (identical(status, "success")) {
+        res <- beta_upload_task$result()
+
+        # Only a descriptor is kept in memory; the matrix stays on disk for the
+        # analysis workers.
+        beta_merged(list(path = res$beta_path, samples = res$samples,
+                         n_probes = res$n_probes))
+        targets_merged(res$targets)
+
+        snapshot_analysis(DIRS, type = "BETA", array_names = NULL,
+                          mset_paths = list(), targets = res$targets)
+
+        showNotification("Complete!", type = "message", duration = 3)
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ beta_upload_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        shinyjs::hide("ld_loading_view")
+        shinyjs::show("ld_main_view")
+        alert_message(list(type = "error",
+                           text = paste("Loading the beta matrix failed:", msg)))
+      }
+    })
+
     # --- RUN QC ---
     # The longest blocking step in the app (10-25 min for 70 EPIC samples) and it
     # runs on every IDAT analysis, so it goes to a worker. Only the samples table
@@ -612,7 +636,7 @@ load_data_server <- function(id, DIRS, cfg) {
 
     observe({
       running <- Filter(function(t) identical(t$status(), "running"),
-                        list(qc_task, beta_task))
+                        list(qc_task, beta_task, beta_upload_task))
       req(length(running) > 0)
       m4a_render_progress(output, session, running[[1]], DIRS$analysis)
     })

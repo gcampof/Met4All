@@ -105,7 +105,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # Disable/enable buttons based on data type (beta or idats)
     observe({
       req(length(names(input)) > 0)
-      req(beta_merged() | !is.null(targets_merged()))
+      # `|` here required numeric/logical operands. It worked only while
+      # beta_merged() held the matrix itself; it is now a small descriptor list,
+      # which made this throw and take the session down as soon as data loaded.
+      req(!is.null(beta_merged()) || !is.null(targets_merged()))
       
       if (!view_initialized()) {
         if (load_data_return$type_selected() == "IDATS") {

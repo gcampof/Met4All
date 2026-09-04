@@ -1174,7 +1174,10 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
 }
 
 
-extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
+# Runs in a worker: reading a full beta-matrix CSV is minutes of work on a large
+# EPIC dataset and used to block every other user's session.
+# Returns paths and small values only -- the matrix stays on disk.
+extract_beta_and_targets <- function(input_dir, beta_dir){
   
   # Get all CSV files recursively from input directory
   all_files <- list.files(path = input_dir, pattern = "\\.csv$", 
@@ -1185,6 +1188,7 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   }
   
   # create merged directory inside beta_dir
+  m4a_progress(0, 3, "Locating the uploaded files")
   merged_dir <- file.path(beta_dir, "merged")
   if (!dir.exists(merged_dir)) {
     dir.create(merged_dir, recursive = TRUE)
@@ -1258,8 +1262,8 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   message("  Beta matrix: ", basename(beta_matrix_file))
   message("  Targets file: ", basename(targets_file))
   
-  removeNotification(notification_id)
-  notification_id <- showNotification("Loading Beta Matrix...", type="message", duration=0)
+  m4a_progress(1, 3, "Reading the beta matrix (this is the long part)")
+  message("[beta] Reading beta matrix CSV")
   
   beta <- read.csv(file.path(merged_dir, "beta_merged.csv"))
   # Set cpgs id as rownames
@@ -1275,14 +1279,18 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   # IDAT path already writes one in merge_beta_matrix_from_disk).
   saveRDS(beta, file.path(merged_dir, "beta_merged.rds"))
 
-  removeNotification(notification_id)
-  notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=3)
+  m4a_progress(2, 3, "Reading the sample sheet")
+  message("[beta] Reading sample sheet")
   
   targets <- read.csv(file.path(merged_dir, "targets_merged.csv"))
   
+  m4a_progress(3, 3, "Beta matrix ready")
+
   invisible(list(
-    beta = beta,
-    targets = targets
+    beta_path = file.path(merged_dir, "beta_merged.rds"),
+    samples   = colnames(beta),
+    n_probes  = nrow(beta),
+    targets   = targets
   ))
 }
 
