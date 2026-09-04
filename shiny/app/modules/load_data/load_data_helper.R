@@ -51,6 +51,21 @@ col_vector<-c(
 )
 
 
+# Path of the small pData sidecar written next to a saved MethylSet.
+mset_pdata_path <- function(mset_path) {
+  sub("\\.rds$", "_pData.rds", mset_path)
+}
+
+
+# Sample metadata for a saved MethylSet. Falls back to reading the full object
+# when the sidecar is missing, so analyses created before it existed still work.
+read_mset_pdata <- function(mset_path) {
+  side <- mset_pdata_path(mset_path)
+  if (file.exists(side)) return(readRDS(side))
+  as.data.frame(minfi::pData(readRDS(mset_path)))
+}
+
+
 # Creates the new directory and returns the path
 create_dir <- function(path) {
   if (!dir.exists(path)) {
@@ -899,27 +914,25 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
   # Calculate boxplot statistics
   message("  Calculating boxplot statistics...")
   
-  # Convert beta matrix to long format for ggplot
-  beta_df <- as.data.frame(beta)
-  beta_long <- tidyr::pivot_longer(
-    beta_df,
-    cols = dplyr::everything(),
-    names_to = "sample",
-    values_to = "beta_value"
+  # Per-sample five-number summary, computed column-wise. Melting the matrix to
+  # long format first would build a ~56M-row tibble (~1.5 GB) for 800k x 70 just
+  # to produce one row per sample.
+  beta <- as.matrix(beta)
+  quants <- matrixStats::colQuantiles(beta, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+  stats_df <- data.frame(
+    sample = colnames(beta),
+    q1     = quants[, 1],
+    median = quants[, 2],
+    q3     = quants[, 3],
+    stringsAsFactors = FALSE
   )
-  
-  # Calculate summary statistics for each sample
-  stats_df <- beta_long %>%
-    dplyr::group_by(sample) %>%
-    dplyr::summarise(
-      q1 = quantile(beta_value, 0.25, na.rm = TRUE),
-      median = quantile(beta_value, 0.5, na.rm = TRUE),
-      q3 = quantile(beta_value, 0.75, na.rm = TRUE),
-      iqr = q3 - q1,
-      lower_whisker = max(q1 - 1.5 * iqr, min(beta_value, na.rm = TRUE)),
-      upper_whisker = min(q3 + 1.5 * iqr, max(beta_value, na.rm = TRUE)),
-      .groups = "drop"
-    )
+  stats_df$iqr <- stats_df$q3 - stats_df$q1
+  stats_df$lower_whisker <- pmax(stats_df$q1 - 1.5 * stats_df$iqr,
+                                 matrixStats::colMins(beta, na.rm = TRUE))
+  stats_df$upper_whisker <- pmin(stats_df$q3 + 1.5 * stats_df$iqr,
+                                 matrixStats::colMaxs(beta, na.rm = TRUE))
+  rownames(stats_df) <- NULL
   
   # Create color palette based on sample groups if available
   n_samples <- nrow(stats_df)
@@ -1046,6 +1059,11 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
 
   message("Saving mSetSq to: ", mset_path)
   saveRDS(mSetSq, file = mset_path, compress = FALSE)
+
+  # Sidecar with just the sample metadata. The CNV dropdowns need only this, and
+  # deserialising the whole ~1.2 GB MethylSet to read it blocked the app for tens
+  # of seconds every time a selector changed.
+  saveRDS(as.data.frame(minfi::pData(mSetSq)), file = mset_pdata_path(mset_path))
   rm(mSetSq)
   
   # message("Saving mSetSq_flt to: ", mset_flt_path)
@@ -1146,7 +1164,8 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
   # Save merged result
   message("Saving merged beta matrix...")
   saveRDS(beta_merged, file = file.path(beta_merge_dir, "beta_merged.rds"))
-  write.csv(beta_merged, file = file.path(beta_merge_dir, "beta_merged.csv"))
+  # The CSV export is written on demand by the download handler instead of here:
+  # it costs ~0.9 GB per analysis and most runs never download it.
   
   cat("\nMerged BetaMatrix completed at", Sys.time(), "\n")
   cat("Final size: ", format(object.size(beta_merged), units = "auto"), "\n")

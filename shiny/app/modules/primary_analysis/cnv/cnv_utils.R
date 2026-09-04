@@ -11,7 +11,8 @@ prepare_cnv_data <- function(
     chrXY, 
     comparison_col,
     baseline = NULL,      
-    comparison = NULL
+    comparison = NULL,
+    cache_dir = NULL
 ){
   # Validate baseline and comparison
   if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
@@ -55,14 +56,35 @@ prepare_cnv_data <- function(
   
   message("[cnv] Reading regions from BED file...")
   detail_regions <- rtracklayer::import(bed_path, format = "bed")
-  message("[cnv] Creating annotation object...")
-  
-  anno <- conumee2::CNV.create_anno(
-    detail_regions = detail_regions,
-    array_type     = array_type,
-    chrXY          = chrXY,
-    genome         = genome
-  )
+  # Building the bin annotation takes 1-2 minutes and depends only on the array,
+  # the genome, the chrXY flag and the BED contents - so it is cached across runs
+  # and users, keyed on a hash of the BED file.
+  anno <- NULL
+  anno_cache <- NULL
+  if (!is.null(cache_dir) && dir.exists(cache_dir)) {
+    bed_hash   <- unname(tools::md5sum(bed_path))
+    anno_cache <- file.path(cache_dir, paste0(
+      "cnv_anno__", array_type, "_xy", isTRUE(chrXY), "_", genome, "_", bed_hash, ".rds"
+    ))
+    if (file.exists(anno_cache)) {
+      message("[cnv] Loading cached annotation")
+      anno <- tryCatch(readRDS(anno_cache), error = function(e) NULL)
+    }
+  }
+
+  if (is.null(anno)) {
+    message("[cnv] Creating annotation object...")
+    anno <- conumee2::CNV.create_anno(
+      detail_regions = detail_regions,
+      array_type     = array_type,
+      chrXY          = chrXY,
+      genome         = genome
+    )
+    if (!is.null(anno_cache)) {
+      tryCatch(saveRDS(anno, anno_cache),
+               error = function(e) warning("[cnv] Could not cache annotation: ", e$message))
+    }
+  }
   
   probes_mset <- featureNames(mset_ctrl)
   probes_anno <- names(anno@probes)

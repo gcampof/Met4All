@@ -199,8 +199,22 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         "beta_merged.csv"
       },
       content = function(file) {
+        # In beta-upload mode the user's own CSV is already here; in IDAT mode it
+        # is generated now rather than on every run. fwrite is ~11x faster than
+        # write.csv on a matrix this size (~2 s vs ~24 s for 800k x 70).
         src <- file.path(DIRS$beta, "merged", "beta_merged.csv")
-        file.copy(src, file)
+        if (file.exists(src)) {
+          file.copy(src, file)
+          return(invisible(NULL))
+        }
+
+        rds <- file.path(DIRS$beta, "merged", "beta_merged.rds")
+        validate(need(file.exists(rds), "Beta matrix not available yet."))
+        beta <- readRDS(rds)
+        data.table::fwrite(
+          data.table::data.table(CpG = rownames(beta), beta),
+          file
+        )
       }
     )
     
@@ -1657,7 +1671,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           chrXY          = input$cnv_include_xy,
           comparison_col = input$cnv_comparison_col,
           baseline       = input$cnv_baseline,
-          comparison     = input$cnv_comparison
+          comparison     = input$cnv_comparison,
+          cache_dir      = DIRS$cache
         ),
         app_dir = app_dir
       )
@@ -1722,11 +1737,11 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       
       selected_array <- input$cnv_array_select
       mset_path <- mSetSq_list()[[selected_array]]
-      mset_obj <- readRDS(mset_path)
-      
-      if (!is.null(mset_obj)) {
-        meta_cols <- colnames(pData(mset_obj))
-        
+      req(!is.null(mset_path))
+
+      pd <- read_mset_pdata(mset_path)
+      if (!is.null(pd)) {
+        meta_cols <- colnames(pd)
         updateSelectInput(session, "cnv_comparison_col", choices = meta_cols,
                           selected = meta_cols[1])
       }
@@ -1738,10 +1753,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       
       selected_array <- input$cnv_array_select
       mset_path <- mSetSq_list()[[selected_array]]
-      mset_obj <- readRDS(mset_path)
-      
-      if (!is.null(mset_obj)) {
-        pd <- pData(mset_obj)
+      req(!is.null(mset_path))
+
+      pd <- read_mset_pdata(mset_path)
+      if (!is.null(pd)) {
         raw_vals <- na.omit(as.character(pd[[input$cnv_comparison_col]]))
         
         validate(
