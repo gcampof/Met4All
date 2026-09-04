@@ -479,6 +479,9 @@ load_data_server <- function(id, DIRS, cfg) {
           beta_and_targets <- extract_beta_and_targets(DIRS$input, DIRS$beta, notification_id)
           beta_merged(beta_and_targets$beta)
           targets_merged(beta_and_targets$targets)
+
+          snapshot_analysis(DIRS, type = "BETA", array_names = NULL,
+                            mset_paths = list(), targets = beta_and_targets$targets)
           
           notification_id <- showNotification("Complete!", type="message", duration=3)
           # Return only using beta and targets
@@ -825,6 +828,9 @@ load_data_server <- function(id, DIRS, cfg) {
         beta_merged(readRDS(res$beta_path))
         targets_merged(res$targets_merged)
         mSetSq_list(res$mset_paths)
+
+        snapshot_analysis(DIRS, type = "IDATS", array_names = array_names(),
+                          mset_paths = res$mset_paths, targets = res$targets_merged)
 
         showNotification("QC and beta generation completed successfully",
                          type = "message", duration = 3)

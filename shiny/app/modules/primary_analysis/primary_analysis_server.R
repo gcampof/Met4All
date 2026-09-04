@@ -1550,6 +1550,11 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     })    
     
     # --- CNV LOGIC ---
+    # Bumped by the Run button once its inputs validate; the worker task below
+    # keys off it. This was previously used without ever being declared, which
+    # stayed hidden only because the old eventReactive consuming it was lazy.
+    run_analysis_trigger <- reactiveVal(0)
+
     # Dynamic Export Buttons based on active tab
     observeEvent(input$cnv_bed_file, {
       req(input$cnv_bed_file)

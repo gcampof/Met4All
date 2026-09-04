@@ -16,16 +16,41 @@ setup_common_dirs <- function(cfg) {
   return(common_dirs)
 }
 
-# Set up analysis directory (creates new one with auto-generated ID from session)
-setup_analysis_dir <- function(common_dirs, cfg, session) {
-  analysis_id <- paste0(
-    format(Sys.time(), "%Y%m%d_%H%M%S"),
-    "_",
-    substr(session$token, 1, 8) 
-  )
-  
+# An analysis id is safe to take from a URL only if it matches exactly this
+# shape. The id becomes a path segment, so anything looser risks traversal.
+# The trailing 32 hex characters are the full Shiny session token: it is what
+# makes the id unguessable, which matters because the id is effectively the
+# bearer token for resuming an analysis.
+M4A_ANALYSIS_ID_RE <- "^[0-9]{8}_[0-9]{6}_[0-9a-f]{32}$"
+
+valid_analysis_id <- function(id) {
+  is.character(id) && length(id) == 1L && !is.na(id) && grepl(M4A_ANALYSIS_ID_RE, id)
+}
+
+# Set up analysis directory.
+#
+# With `resume_id` naming an existing analysis, that directory is reused instead
+# of a new one being created, which is what lets a user come back to work they
+# left. Falls back to a fresh analysis whenever the id is absent, malformed or
+# no longer on disk.
+setup_analysis_dir <- function(common_dirs, cfg, session, resume_id = NULL) {
+  resumed <- FALSE
+
+  if (valid_analysis_id(resume_id)) {
+    candidate <- file.path(common_dirs$data, paste0("analysis_", resume_id))
+    if (dir.exists(candidate)) {
+      analysis_id <- resume_id
+      resumed <- TRUE
+      message("Resuming analysis: ", analysis_id)
+    }
+  }
+
+  if (!resumed) {
+    analysis_id <- paste0(format(Sys.time(), "%Y%m%d_%H%M%S"), "_", session$token)
+  }
+
   analysis_dir <- file.path(common_dirs$data, paste0("analysis_", analysis_id))
-  
+
   dir.create(analysis_dir, showWarnings = FALSE, recursive = TRUE)
   
   subdirs <- list()
@@ -37,7 +62,67 @@ setup_analysis_dir <- function(common_dirs, cfg, session) {
   
   message("Analysis directory created: ", analysis_dir)
   
-  c(common_dirs, list(analysis = analysis_dir, analysis_id = analysis_id), subdirs)
+  c(common_dirs,
+    list(analysis = analysis_dir, analysis_id = analysis_id, resumed = resumed),
+    subdirs)
+}
+
+
+# --- Resuming an analysis ----------------------------------------------------
+# A small manifest records where the finished artifacts live, so a later visit
+# can rehydrate the session from disk instead of starting over. Only paths and
+# small values go in it; the heavy objects stay where they already are.
+
+manifest_path <- function(analysis_dir) file.path(analysis_dir, "manifest.rds")
+
+write_analysis_manifest <- function(analysis_dir, type, array_names, mset_paths,
+                                    beta_path, targets_path) {
+  manifest <- list(
+    version      = 1L,
+    saved_at     = Sys.time(),
+    type         = type,
+    array_names  = array_names,
+    mset_paths   = mset_paths,
+    beta_path    = beta_path,
+    targets_path = targets_path
+  )
+  tryCatch(
+    saveRDS(manifest, manifest_path(analysis_dir)),
+    error = function(e) warning("Could not write analysis manifest: ", e$message)
+  )
+  invisible(manifest)
+}
+
+# Persist the samplesheet and mark the analysis resumable. Called once an
+# analysis has a usable beta matrix; the matrix itself is already on disk.
+snapshot_analysis <- function(DIRS, type, array_names, mset_paths, targets) {
+  merged_dir <- file.path(DIRS$beta, "merged")
+  dir.create(merged_dir, showWarnings = FALSE, recursive = TRUE)
+
+  beta_path    <- file.path(merged_dir, "beta_merged.rds")
+  targets_path <- file.path(merged_dir, "targets_merged.rds")
+
+  tryCatch(saveRDS(targets, targets_path),
+           error = function(e) warning("Could not save samplesheet: ", e$message))
+
+  write_analysis_manifest(DIRS$analysis, type, array_names, mset_paths,
+                          beta_path, targets_path)
+}
+
+
+# Returns NULL unless the manifest exists and the files it points at are still
+# there, so a half-finished or partly deleted analysis simply starts fresh.
+read_analysis_manifest <- function(analysis_dir) {
+  path <- manifest_path(analysis_dir)
+  if (!file.exists(path)) return(NULL)
+
+  manifest <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (is.null(manifest) || !identical(manifest$version, 1L)) return(NULL)
+
+  needed <- c(manifest$beta_path, manifest$targets_path)
+  if (length(needed) == 0 || !all(file.exists(needed))) return(NULL)
+
+  manifest
 }
 
 

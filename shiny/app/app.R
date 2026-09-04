@@ -42,7 +42,7 @@ m4a_apply_thread_caps()
 onStop(function() m4a_stop_workers())
 
 # JavaScript reset code
-jsResetCode <- "shinyjs.resetPage = function() {history.go(0)}"
+jsResetCode <- "shinyjs.resetPage = function() {window.location.href = window.location.pathname;}"
 
 # UI
 ui <- fluidPage(
@@ -190,7 +190,15 @@ server <- function(input, output, session) {
   # Initial setup
   cfg  <- config::get()
   DIRS <- setup_common_dirs(cfg)
-  DIRS <- setup_analysis_dir(DIRS, cfg, session)
+
+  # ?analysis=<id> in the URL identifies work to resume. The id is validated
+  # against a strict pattern before it is ever used as a path.
+  resume_id <- isolate(parseQueryString(session$clientData$url_search)$analysis)
+  DIRS <- setup_analysis_dir(DIRS, cfg, session, resume_id = resume_id)
+
+  # Publish the id so the browser URL is the bookmark. Nothing else is needed to
+  # come back to this analysis later.
+  updateQueryString(paste0("?analysis=", DIRS$analysis_id), mode = "replace")
 
   APP_CACHE <- reactiveVal(NULL)
   
@@ -211,6 +219,50 @@ server <- function(input, output, session) {
   
   # Initialize data loading
   load_data_return <- load_data_server("load_data", DIRS, cfg)
+
+  # Resume: rehydrate from disk rather than making the user start over. Only a
+  # finished analysis has a manifest, so anything half-done starts fresh.
+  if (isTRUE(DIRS$resumed)) {
+    manifest <- read_analysis_manifest(DIRS$analysis)
+
+    if (is.null(manifest)) {
+      # No manifest at all just means the user came back before finishing the
+      # upload; that is ordinary and needs no alarm. Warn only when a manifest
+      # exists but its artifacts have gone.
+      if (file.exists(manifest_path(DIRS$analysis))) {
+        showNotification(
+          "That analysis could not be restored - its files are no longer available.",
+          type = "warning", duration = 8
+        )
+      }
+    } else {
+      tryCatch({
+        load_data_return$type_selected(manifest$type)
+        load_data_return$array_names_ld(manifest$array_names)
+        load_data_return$mSetSq_list_ld(manifest$mset_paths)
+        load_data_return$targets_merged_ld(readRDS(manifest$targets_path))
+        # Set last: the view switch below keys off it.
+        load_data_return$beta_merged_ld(readRDS(manifest$beta_path))
+
+        showNotification("Welcome back - your previous analysis has been restored.",
+                         type = "message", duration = 6)
+      }, error = function(e) {
+        showNotification(paste("Could not restore the previous analysis:", conditionMessage(e)),
+                         type = "error", duration = 10)
+      })
+    }
+  }
+
+  # Keep the samplesheet on disk current. It is edited in-session (cell edits,
+  # consensus clusters written back), so without this a resumed analysis would
+  # silently lose those changes.
+  observeEvent(load_data_return$targets_merged_ld(), {
+    req(load_data_return$targets_merged_ld())
+    path <- file.path(DIRS$beta, "merged", "targets_merged.rds")
+    if (dir.exists(dirname(path))) {
+      try(saveRDS(load_data_return$targets_merged_ld(), path), silent = TRUE)
+    }
+  }, ignoreInit = TRUE)
   
   # Server also initialized at start
   primary_analysis_server("primary_analysis", load_data_return, DIRS, APP_CACHE, cfg)
