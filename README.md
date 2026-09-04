@@ -217,9 +217,14 @@ everyone else's session. Two settings control it:
 | `M4A_THREADS_PER_JOB` | 2 | Threads inside each analysis. Keep `MAX_JOBS x THREADS_PER_JOB` within the host's cores. |
 | `M4A_MIN_FREE_GB` | 15 | Refuse to start an analysis with less free disk than this. |
 
-Allow roughly **2 GB of RAM plus 5 GB per concurrent analysis**, and **7-13 GB of
-scratch disk per analysis** (a 70-sample EPIC + 450k run is at the top of that
-range). The default of 2 concurrent analyses fits comfortably in 24 GB.
+Measured on 800k probes x 70 samples, a worker peaks at **~3 GB** for most
+analyses and **~9.5 GB** for differential methylation, which sets the ceiling.
+The app process itself stays under 0.5 GB. Allow roughly **0.5 GB plus 3 GB per
+concurrent analysis**, or **0.5 GB plus 10 GB** if users run differential
+concurrently, and **7-13 GB of scratch disk per analysis**.
+
+The default of 2 concurrent analyses fits in 24 GB. Raising `M4A_MAX_JOBS`
+beyond that needs proportionally more RAM.
 
 If one machine is not enough, `docker-compose.scale.yml` runs several instances
 behind a reverse proxy with no code or image changes:
