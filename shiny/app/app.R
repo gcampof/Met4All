@@ -192,27 +192,7 @@ server <- function(input, output, session) {
   DIRS <- setup_common_dirs(cfg)
   DIRS <- setup_analysis_dir(DIRS, cfg, session)
 
-  # Protect this session's results from the startup sweep below, and release
-  # them when the session ends.
-  register_analysis_dir(DIRS$analysis, session)
-
-  # Keep the heartbeat fresh. The in-process registry only protects this replica;
-  # the heartbeat file is what stops a second replica sharing the data volume from
-  # sweeping a session that has been running longer than the cleanup window.
-  observe({
-    invalidateLater(30 * 60 * 1000)
-    touch_analysis_dir(DIRS$analysis)
-  })
-
   APP_CACHE <- reactiveVal(NULL)
-  
-  # Flags
-  primary_ui_initialized <- reactiveVal(FALSE)
-  primary_server_initialized <- reactiveVal(FALSE)
-  heavy_components_loaded <- reactiveVal(FALSE)
-  
-  # Cleanup on start
-  cleanup_old_analysis_dirs(DIRS$data, max_age_hours = 24)
   
   # Display session ID in navbar
   output$session_id_display <- renderUI({

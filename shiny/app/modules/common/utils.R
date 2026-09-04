@@ -41,70 +41,6 @@ setup_analysis_dir <- function(common_dirs, cfg, session) {
 }
 
 
-# Analysis dirs belonging to sessions that are still connected in THIS process.
-# Registered dirs are never swept, however old they look.
-if (!exists(".M4A_LIVE_DIRS", envir = globalenv(), inherits = FALSE)) {
-  assign(".M4A_LIVE_DIRS", new.env(parent = emptyenv()), envir = globalenv())
-}
-
-.M4A_HEARTBEAT <- ".m4a_active"
-
-# Register an analysis dir as live and keep it swept-safe for as long as the
-# session lasts. The heartbeat file is what protects it from OTHER replicas
-# sharing the same data volume, which cannot see this process's registry.
-register_analysis_dir <- function(analysis_dir, session) {
-  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
-  assign(analysis_dir, TRUE, envir = live)
-  touch_analysis_dir(analysis_dir)
-
-  session$onSessionEnded(function() {
-    suppressWarnings(rm(list = analysis_dir, envir = live))
-    unlink(file.path(analysis_dir, .M4A_HEARTBEAT), force = TRUE)
-  })
-
-  invisible(analysis_dir)
-}
-
-touch_analysis_dir <- function(analysis_dir) {
-  hb <- file.path(analysis_dir, .M4A_HEARTBEAT)
-  # Writing the file (not just creating it) is what advances the parent dir's
-  # mtime, which is the signal cleanup_old_analysis_dirs reads.
-  try(writeLines(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), hb), silent = TRUE)
-  invisible(hb)
-}
-
-# Reclaim abandoned analysis dirs.
-#
-# The age test deliberately uses the heartbeat file, not the directory's own
-# mtime: a directory's mtime only advances when an entry is added or removed
-# directly inside it, and every analysis writes into results/ subdirs instead.
-# The old mtime check therefore froze at creation time, so a session still
-# running after max_age_hours had its entire tree deleted by the next visitor.
-cleanup_old_analysis_dirs <- function(base_dir, max_age_hours = 24) {
-  if (!dir.exists(base_dir)) return(invisible(NULL))
-
-  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
-  dirs <- list.dirs(base_dir, recursive = FALSE, full.names = TRUE)
-  now  <- Sys.time()
-
-  for (d in dirs) {
-    # Live in this process.
-    if (!is.null(get0(d, envir = live, inherits = FALSE))) next
-
-    hb <- file.path(d, .M4A_HEARTBEAT)
-    last_seen <- if (file.exists(hb)) file.info(hb)$mtime else file.info(d)$mtime
-    if (is.na(last_seen)) next
-
-    if (difftime(now, last_seen, units = "hours") > max_age_hours) {
-      unlink(d, recursive = TRUE, force = TRUE)
-      message("[CLEANUP] Removed old analysis dir: ", d)
-    }
-  }
-
-  invisible(NULL)
-}
-
-
 # GO: Biological Process gene sets (SYMBOL)
 get_go_bp_gene_sets <- function() {
   go_terms <- AnnotationDbi::select(
@@ -229,8 +165,13 @@ get_built_in_color_palettes <- function(){
 
 
 # Load custom palettes from directory
-load_custom_palettes <- function(dir) {
-  txt_files <- list.files(dir, pattern = "\\.txt$", full.names = TRUE)
+# `dirs` may name several directories: the shared one shipped with the image and,
+# when a user uploads one, their own session directory. Uploads are kept per
+# session so one user's palette does not appear in everyone else's dropdowns.
+load_custom_palettes <- function(dirs) {
+  dirs <- dirs[dir.exists(dirs)]
+  if (length(dirs) == 0) return(list())
+  txt_files <- unlist(lapply(dirs, list.files, pattern = "\\.txt$", full.names = TRUE))
   
   if (length(txt_files) == 0) return(list())
   
@@ -255,9 +196,9 @@ load_custom_palettes <- function(dir) {
 
 
 # Prepare all color palettes
-prepare_color_palettes <- function(dir) {
+prepare_color_palettes <- function(dirs) {
   builtin_palettes <- get_built_in_color_palettes()
-  custom_palettes <- load_custom_palettes(dir)
+  custom_palettes <- load_custom_palettes(dirs)
   
   all_palettes <- c(builtin_palettes, custom_palettes)
   
@@ -325,39 +266,6 @@ load_new_palette <- function(file_path, palette_name, palette_dir) {
     list(success = FALSE, message = paste("Error:", e$message))
   })
 }
-
-start_logging <- function(out_dir) {
-  tryCatch({
-    log_file_path <- file.path(out_dir, "logs.txt")
-    log_conn <- file(log_file_path, open = "wt")
-    if (sink.number(type = "output") > 0) sink(type = "output")
-    if (sink.number(type = "message") > 0) sink(type = "message")
-    sink(log_conn, type = "output", split = TRUE)
-    sink(log_conn, type = "message")
-    assign(".log_conn", log_conn, envir = .GlobalEnv)
-    options(crayon.enabled = FALSE)
-    options(cli.num_colors = 1)
-    cat("\n=== LOG STARTED", format(Sys.time()), "===\n\n")
-  }, error = function(e) {
-    warning("[Logging] Failed to start logging: ", e$message)
-  })
-}
-
-
-stop_logging <- function() {
-  cat("\n=== LOG STOPPED", format(Sys.time()), "===\n")
-  
-  # Close sinks in reverse order
-  if (sink.number(type = "message") > 0) sink(type = "message")
-  if (sink.number(type = "output") > 0) sink(type = "output")
-  
-  # Close and remove the connection
-  if (exists(".log_conn")) {
-    close(.log_conn)
-    rm(.log_conn, envir = .GlobalEnv)
-  }
-}
-
 
 load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
   showModal(modalDialog(

@@ -31,9 +31,36 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     beta_rds_path <- reactive({
       file.path(DIRS$beta, "merged", "beta_merged.rds")
     })
+    # Uploaded palettes live in this session's own directory, so one user's
+    # upload does not turn up in every other user's dropdowns.
+    session_palette_dir <- file.path(DIRS$analysis, "palettes")
+    palette_dirs <- function() c(DIRS$custom_color_palette, session_palette_dir)
+    palettes_version <- reactiveVal(0)
+
     PALETTES <- reactive({
-      do.call(reactiveValues,
-              prepare_color_palettes(DIRS$custom_color_palette))
+      palettes_version()
+      do.call(reactiveValues, prepare_color_palettes(palette_dirs()))
+    })
+
+    # The "Add Color Palette" input previously had no observer at all: uploading a
+    # file silently did nothing.
+    observeEvent(input$custom_palette_file, {
+      req(input$custom_palette_file)
+      dir.create(session_palette_dir, showWarnings = FALSE, recursive = TRUE)
+
+      res <- load_new_palette(
+        file_path    = input$custom_palette_file$datapath,
+        palette_name = tools::file_path_sans_ext(input$custom_palette_file$name),
+        palette_dir  = session_palette_dir
+      )
+
+      if (isTRUE(res$success)) {
+        palettes_version(palettes_version() + 1)
+        showNotification(res$message, type = "message", duration = 4)
+      } else {
+        showNotification(paste("Could not add palette:", res$message),
+                         type = "error", duration = 8)
+      }
     })
     
     # Enable IDAT-only controls if type is IDATS
@@ -177,11 +204,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       show_view("view_differential", "Differential Methylation")
     })
     
-    observeEvent(input$nav_cnv, {
-      current_view("cnv")
-      update_active_button("nav_cnv")
-      show_view("view_cnv", "CNV")
-    }) 
     observeEvent(input$nav_cnv, {
       current_view("cnv")
       update_active_button("nav_cnv")
@@ -802,7 +824,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           targets         = targets_merged(),
           id_col          = input$heatmap_id_col,
           annotation_cols = input$heatmap_annotation_cols,
-          palette_dir     = DIRS$custom_color_palette,
+          palette_dir     = palette_dirs(),
           palette_name    = input$heatmap_color_palette,
           top_cpgs        = input$heatmap_top,
           cc_kmax         = input$heatmap_cc_kmax,
@@ -1141,7 +1163,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           pathways_dir   = DIRS$pathways,
           annotation_pkg = cfg$annotation_pkg,
           gene_set       = cfg$gene_set,
-          palette_dir    = DIRS$custom_color_palette,
+          palette_dir    = palette_dirs(),
           palette_name   = input$diff_met_color_palette,
           id_col         = input$diff_met_id_col,
           comparison_col = input$diff_met_comparison_col,
@@ -1529,55 +1551,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # --- CNV LOGIC ---
     # Dynamic Export Buttons based on active tab
-    output$cnv_export_buttons <- renderUI({
-      req(input$cnv_tabset)
-      
-      active_tab <- input$cnv_tabset
-      
-      switch(active_tab,
-             "pileup" = div(
-               p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
-                 icon("download", style = "font-size: 0.75rem;"), " Export Pile-up Plot"),
-               div(
-                 class = "d-flex gap-2",
-                 downloadButton(ns("cnv_download_pileup_png"), " PNG",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
-                 downloadButton(ns("cnv_download_pileup_pdf"), " PDF",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1")
-               )
-             ),
-             
-             "persample" = div(
-               p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
-                 icon("download", style = "font-size: 0.75rem;"), " Export Sample Plot"),
-               div(
-                 class = "d-flex gap-2",
-                 downloadButton(ns("cnv_download_sample_png"), " PNG",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
-                 downloadButton(ns("cnv_download_sample_pdf"), " PDF",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1")
-               )
-             ),
-             
-             # Default fallback
-             div(
-               p(class = "text-muted mb-2", style = "font-size: 0.75rem;",
-                 "Select a tab to see export options")
-             )
-      )
-    })
-    
-    # Reactive to store final BED file path
-    cnv_bed_path <- reactiveVal(NULL)
-    
-    # Reactive to trigger analysis
-    run_analysis_trigger <- reactiveVal(0)
-    
-    # Store paths to saved plots
-    cached_pileup_png <- reactiveVal(NULL)
-    cached_sample_png <- reactiveVal(NULL)
-    
-    # Observer for BED file upload
     observeEvent(input$cnv_bed_file, {
       req(input$cnv_bed_file)
       

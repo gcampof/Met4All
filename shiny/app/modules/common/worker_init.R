@@ -25,6 +25,11 @@ m4a_worker_init <- function(app_dir) {
   source("modules/common/concurrency.R")
   m4a_apply_thread_caps()
 
+  # A worker has no graphics device. Without this, any plotting call that is not
+  # wrapped in an explicit png()/pdf() opens Rplots.pdf in the working directory,
+  # which lives inside the image and is read-only under Apptainer/Singularity.
+  options(device = function(...) grDevices::pdf(NULL))
+
   suppressPackageStartupMessages({
     source("modules/common/all_imports.R")
 
