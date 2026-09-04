@@ -68,6 +68,24 @@ setup_analysis_dir <- function(common_dirs, cfg, session, resume_id = NULL) {
 }
 
 
+# What the main process keeps in place of the beta matrix itself.
+#
+# The matrix is ~450 MB for a 70-sample EPIC run and used to be held in a
+# per-session reactiveVal, so N connected users cost N x 450 MB before any
+# analysis started. Every analysis now reads it from disk inside a worker, so
+# the main process only needs to know that it exists and what is in it.
+beta_descriptor <- function(path, beta = NULL) {
+  if (is.null(beta) && file.exists(path)) {
+    beta <- tryCatch(readRDS(path), error = function(e) NULL)
+  }
+  list(
+    path     = path,
+    samples  = if (!is.null(beta)) colnames(beta) else character(0),
+    n_probes = if (!is.null(beta)) nrow(beta) else NA_integer_
+  )
+}
+
+
 # --- Resuming an analysis ----------------------------------------------------
 # A small manifest records where the finished artifacts live, so a later visit
 # can rehydrate the session from disk instead of starting over. Only paths and

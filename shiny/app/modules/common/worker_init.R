@@ -53,6 +53,10 @@ m4a_worker_init <- function(app_dir) {
     source("modules/primary_analysis/cnv/cnv_utils.R")
     source("modules/primary_analysis/differential/differential_utils.R")
     source("modules/primary_analysis/heatmap/heatmap_utils.R")
+    source("modules/primary_analysis/mds/mds_utils.R")
+    source("modules/primary_analysis/pca/pca_utils.R")
+    source("modules/primary_analysis/umap/umap_utils.R")
+    source("modules/primary_analysis/global_met/global_utils.R")
   })
 
   assign(".m4a_worker_ready", TRUE, envir = globalenv())

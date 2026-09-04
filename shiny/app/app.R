@@ -241,8 +241,9 @@ server <- function(input, output, session) {
         load_data_return$array_names_ld(manifest$array_names)
         load_data_return$mSetSq_list_ld(manifest$mset_paths)
         load_data_return$targets_merged_ld(readRDS(manifest$targets_path))
-        # Set last: the view switch below keys off it.
-        load_data_return$beta_merged_ld(readRDS(manifest$beta_path))
+        # Set last: the view switch below keys off it. Only a descriptor is
+        # stored; the matrix stays on disk for the workers.
+        load_data_return$beta_merged_ld(beta_descriptor(manifest$beta_path))
 
         showNotification("Welcome back - your previous analysis has been restored.",
                          type = "message", duration = 6)

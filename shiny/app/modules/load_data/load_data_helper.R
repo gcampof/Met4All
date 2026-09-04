@@ -1318,7 +1318,8 @@ run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_d
 #
 # thresholds is a named character/numeric vector, one entry per array.
 run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
-                                qc_dir, filter_dir, beta_dir, preprocessing_dir) {
+                                qc_dir, filter_dir, beta_dir, preprocessing_dir,
+                                analysis_dir) {
   beta_paths <- c()
   mset_paths <- list()
 
@@ -1376,8 +1377,24 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
   message("[beta] Merging sample sheets")
   targets_result <- merge_samplesheets(arrays, preprocessing_dir, beta_merge_dir)
 
+  beta_path    <- file.path(beta_merge_dir, "beta_merged.rds")
+  targets_path <- file.path(beta_merge_dir, "targets_merged.rds")
+  saveRDS(targets_result$targets_merged, targets_path)
+
+  # The manifest is written here, in the worker, rather than by the session that
+  # started the job. A user who closes the tab mid-run still has the analysis
+  # completed and recorded, so returning to the URL picks it up.
+  write_analysis_manifest(
+    analysis_dir = analysis_dir,
+    type         = "IDATS",
+    array_names  = arrays,
+    mset_paths   = mset_paths,
+    beta_path    = beta_path,
+    targets_path = targets_path
+  )
+
   list(
-    beta_path      = file.path(beta_merge_dir, "beta_merged.rds"),
+    beta_path      = beta_path,
     mset_paths     = mset_paths,
     targets_merged = targets_result$targets_merged
   )

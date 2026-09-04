@@ -1,5 +1,6 @@
+# Runs in a worker; see prepare_mds_data for why beta arrives as a path.
 prepare_umap_data <- function(
-    beta,
+    beta_path,
     targets,
     top_cpgs,
     min_dist,
@@ -10,6 +11,7 @@ prepare_umap_data <- function(
     id_col,
     seed
 ) {
+  beta <- readRDS(beta_path)
   # Prepare inputs
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
   beta2 <- align_res$beta2
@@ -22,26 +24,26 @@ prepare_umap_data <- function(
   
   # --- SANITY CHECKS --
   n_samples <- nrow(mat_t)
-  shiny::validate(
-    shiny::need(top_cpgs >= 100,
-                paste0("Too few CpGs selected (", top_cpgs, "). Please select at least 100.")),
-    shiny::need(n_neighbors < n_samples,
-                paste0("N neighbors (", n_neighbors, ") must be smaller than number of samples (", n_samples, ").")),
-    shiny::need(knn < n_samples,
-                paste0("KNN (", knn, ") must be smaller than number of samples (", n_samples, ").")),
-    shiny::need(consensus_k_max < n_samples,
-                paste0("Consensus K max (", consensus_k_max, ") must be smaller than number of samples (", n_samples, ")."))
-  )
+  if (top_cpgs < 100) {
+    stop("Too few CpGs selected (", top_cpgs, "). Please select at least 100.")
+  }
+  if (n_neighbors >= n_samples) {
+    stop("N neighbors (", n_neighbors, ") must be smaller than number of samples (",
+         n_samples, ").")
+  }
+  if (knn >= n_samples) {
+    stop("KNN (", knn, ") must be smaller than number of samples (", n_samples, ").")
+  }
+  if (consensus_k_max >= n_samples) {
+    stop("Consensus K max (", consensus_k_max, ") must be smaller than number of samples (",
+         n_samples, ").")
+  }
   
   # UMAP config
   n_samples <- nrow(mat_t)
   if (n_neighbors >= n_samples) {
-    shiny::validate(
-      shiny::need(FALSE, paste0(
-        "N neighbors (", n_neighbors, ") must be smaller than the number of samples (", n_samples, "). ",
-        "Please reduce N neighbors in the UMAP Parameters."
-      ))
-    )
+    stop("N neighbors (", n_neighbors, ") must be smaller than the number of samples (",
+         n_samples, "). Please reduce N neighbors in the UMAP Parameters.")
   }
   
   cfg <- umap::umap.defaults
@@ -196,15 +198,21 @@ plot_umap <- function(
 
 
 
-predict_umap <- function(beta, umap_model) {
+# Runs in a worker. Takes the beta matrix as a path and works out which samples
+# are new relative to the model, so the caller never needs the matrix in memory.
+# Returns NULL when the model already covers every sample.
+predict_umap <- function(beta_path, umap_model) {
+  beta <- readRDS(beta_path)
+  new_sample_ids <- setdiff(colnames(beta), rownames(umap_model$layout))
+  if (length(new_sample_ids) == 0) return(NULL)
+  beta <- beta[, new_sample_ids, drop = FALSE]
   
   umap_features <- colnames(umap_model$data)
   matched_cpgs  <- intersect(umap_features, rownames(beta))
   
-  shiny::validate(
-    shiny::need(length(matched_cpgs) > 0,
-                "No overlapping CpGs between UMAP model and new data.")
-  )
+  if (length(matched_cpgs) == 0) {
+    stop("No overlapping CpGs between UMAP model and new data.")
+  }
   
   # Build aligned matrix (samples x features), fill unmatched CpGs with 0
   aligned_matrix <- matrix(0, nrow = ncol(beta), ncol = length(umap_features))

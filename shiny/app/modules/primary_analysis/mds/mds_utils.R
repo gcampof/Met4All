@@ -1,5 +1,8 @@
 # Prepare MDS data from beta matrix
-prepare_mds_data <- function(beta, targets, id_col, top_cpgs) {
+# Runs in a worker: takes the beta matrix as a path so the ~450 MB object never
+# has to live in the main process or cross the worker boundary.
+prepare_mds_data <- function(beta_path, targets, id_col, top_cpgs) {
+  beta <- readRDS(beta_path)
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
   beta2    <- align_res$beta2
   targets2 <- align_res$targets2

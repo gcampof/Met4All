@@ -477,7 +477,12 @@ load_data_server <- function(id, DIRS, cfg) {
           removeNotification(notification_id)
           notification_id <- showNotification("Extracting BETA files...", type="message", duration=0)
           beta_and_targets <- extract_beta_and_targets(DIRS$input, DIRS$beta, notification_id)
-          beta_merged(beta_and_targets$beta)
+          # Only a descriptor is kept in memory. Every analysis reads the matrix
+          # from disk in a worker, so holding ~450 MB per connected session here
+          # bought nothing.
+          beta_merged(beta_descriptor(
+            file.path(DIRS$beta, "merged", "beta_merged.rds"), beta_and_targets$beta
+          ))
           targets_merged(beta_and_targets$targets)
 
           snapshot_analysis(DIRS, type = "BETA", array_names = NULL,
@@ -811,7 +816,8 @@ load_data_server <- function(id, DIRS, cfg) {
           qc_dir            = DIRS$qc,
           filter_dir        = DIRS$filter,
           beta_dir          = DIRS$beta,
-          preprocessing_dir = DIRS$preprocessing
+          preprocessing_dir = DIRS$preprocessing,
+          analysis_dir      = DIRS$analysis
         ),
         app_dir = normalizePath(getwd())
       )
@@ -825,7 +831,7 @@ load_data_server <- function(id, DIRS, cfg) {
 
         # The matrix stays on disk in the worker and is loaded here once, because
         # the interactive analyses that still run in-process need it in memory.
-        beta_merged(readRDS(res$beta_path))
+        beta_merged(beta_descriptor(res$beta_path))
         targets_merged(res$targets_merged)
         mSetSq_list(res$mset_paths)
 

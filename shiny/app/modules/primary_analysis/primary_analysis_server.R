@@ -338,28 +338,46 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # --- MDS PLOT LOGIC ---
     # Reactive trigger for analysis
-    mds_analysis_trigger <- reactiveVal(0)
     cached_mds_plot <- reactiveVal(NULL)
     
-    # Prepare MDS data (only runs when trigger changes)
-    mds_data <- eventReactive(mds_analysis_trigger(), {
-      req(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
-      validate(need(!is.null(beta_merged()), "Beta data missing"))
-      validate(need(!is.null(targets_merged()), "Targets data missing"))
-      
-      showNotification("Running MDS analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_mds_data(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
-      }, error = function(e) {
-        shiny::validate(shiny::need(FALSE, paste0("Error preparing MDS data: ", e$message)))
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Run analysis when button is clicked
+    mds_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_mds_data", args, app_dir)
+    })
+
     observeEvent(input$mds_run_analysis, {
-      mds_analysis_trigger(mds_analysis_trigger() + 1)
+      req(targets_merged())
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running MDS analysis..." else queued,
+                       type = "message", duration = 5)
+
+      mds_task$invoke(
+        args = list(
+          beta_path = beta_rds_path(),
+          targets   = targets_merged(),
+          id_col    = input$mds_id_col,
+          top_cpgs  = input$mds_top_cpgs
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(mds_task$status(), "running")) shinyjs::disable("mds_run_analysis")
+      else shinyjs::enable("mds_run_analysis")
+    })
+
+    mds_data <- reactive({
+      status <- mds_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running MDS analysis..."))
+      tryCatch(mds_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
     })
     
     # Update color_by choices whenever mds_data recomputes
@@ -377,7 +395,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     output$mds_plot <- renderPlot({
       # Show placeholder if analysis hasn't been run
-      if (mds_analysis_trigger() == 0) {
+      if (identical(mds_task$status(), "initial")) {
         return(
           ggplot2::ggplot() +
             ggplot2::annotate("text", x = 1, y = 1, 
@@ -428,31 +446,47 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # --- PCA PLOT LOGIC
     # Reactive trigger for analysis
-    pca_analysis_trigger <- reactiveVal(0)
     cached_pca_plot <- reactiveVal(NULL)
     
     # Prepare PCA data (only runs when trigger changes)
-    pca_data <- eventReactive(pca_analysis_trigger(), {
-      req(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
-      
-      validate(need(!is.null(beta_merged()), "Beta data missing"))
-      validate(need(!is.null(targets_merged()), "Targets data missing"))
-      
-      showNotification("Running PCA analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_pca_data(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
-      }, error = function(e) {
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing PCA data: ", e$message))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Run analysis when button is clicked
+    pca_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_pca_data", args, app_dir)
+    })
+
     observeEvent(input$pca_run_analysis, {
-      pca_analysis_trigger(pca_analysis_trigger() + 1)
+      req(targets_merged())
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running PCA analysis..." else queued,
+                       type = "message", duration = 5)
+
+      pca_task$invoke(
+        args = list(
+          beta_path = beta_rds_path(),
+          targets   = targets_merged(),
+          id_col    = input$pca_id_col,
+          top_cpgs  = input$pca_top_cpgs
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(pca_task$status(), "running")) shinyjs::disable("pca_run_analysis")
+      else shinyjs::enable("pca_run_analysis")
+    })
+
+    pca_data <- reactive({
+      status <- pca_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running PCA analysis..."))
+      tryCatch(pca_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
     })
     
     # Update color_by choices whenever pca_data recomputes
@@ -470,7 +504,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     output$pca_plot <- renderPlot({
       # Show placeholder if analysis hasn't been run
-      if (pca_analysis_trigger() == 0) {
+      if (identical(pca_task$status(), "initial")) {
         return(
           ggplot2::ggplot() +
             ggplot2::annotate("text", x = 1, y = 1, 
@@ -532,58 +566,77 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     # --- UMAP PLOT LOGIC ---
     # Reactive trigger for analysis
-    umap_analysis_trigger <- reactiveVal(0)
     cached_umap_plot <- reactiveVal(NULL)
     cached_umap_model <- reactiveVal(NULL)
     
     # Prepare UMAP data (only runs when trigger changes)
-    umap_data <- eventReactive(umap_analysis_trigger(), {
-      req(
-        beta_merged(), targets_merged(),
-        input$umap_top_cpgs, input$umap_min_dist,
-        input$umap_n_neighbors, input$umap_metric,
-        input$umap_knn, input$umap_consensus_k_max,
-        input$umap_id_col, input$umap_seed
+    umap_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_umap_data", args, app_dir)
+    })
+
+    observeEvent(input$umap_run_analysis, {
+      req(targets_merged(),
+          input$umap_top_cpgs, input$umap_min_dist,
+          input$umap_n_neighbors, input$umap_metric,
+          input$umap_knn, input$umap_consensus_k_max,
+          input$umap_id_col, input$umap_seed)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running UMAP analysis..." else queued,
+                       type = "message", duration = 5)
+
+      umap_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
+          targets         = targets_merged(),
+          top_cpgs        = input$umap_top_cpgs,
+          min_dist        = input$umap_min_dist,
+          n_neighbors     = input$umap_n_neighbors,
+          metric          = input$umap_metric,
+          knn             = input$umap_knn,
+          consensus_k_max = input$umap_consensus_k_max,
+          id_col          = input$umap_id_col,
+          seed            = input$umap_seed
+        ),
+        app_dir = app_dir
       )
-      
-      showNotification("Running UMAP analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        result <- prepare_umap_data(
-          beta_merged(),
-          targets_merged(),
-          input$umap_top_cpgs,
-          input$umap_min_dist,
-          input$umap_n_neighbors,
-          input$umap_metric,
-          input$umap_knn,
-          input$umap_consensus_k_max,
-          input$umap_id_col,
-          input$umap_seed
-        )
-        
-        # Update targets df with consensus clusters
-        targets_merged(result$targets_updated)
-        
-        # Store UMAP model for download
-        cached_umap_model(result$um_model)
-        
-        result$umap_df
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing UMAP data: ", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
+    })
+
+    observe({
+      if (identical(umap_task$status(), "running")) shinyjs::disable("umap_run_analysis")
+      else shinyjs::enable("umap_run_analysis")
+    })
+
+    umap_result <- reactive({
+      status <- umap_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running UMAP analysis..."))
+      tryCatch(umap_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error preparing UMAP data: ",
+                                             conditionMessage(e))))
+                 NULL
+               })
+    })
+
+    # Side effects belong here, not inside the reactive above: writing the
+    # clusters back and stashing the model must happen once per completed run.
+    observeEvent(umap_task$status(), {
+      req(identical(umap_task$status(), "success"))
+      res <- tryCatch(umap_task$result(), error = function(e) NULL)
+      req(!is.null(res))
+      targets_merged(res$targets_updated)
+      cached_umap_model(res$um_model)
+    })
+
+    umap_data <- reactive({
+      req(umap_result())
+      umap_result()$umap_df
+    })
     
     # Run analysis when button is clicked
-    observeEvent(input$umap_run_analysis, {
-      umap_mode("training")
-      predicted_umap_df(NULL)
-      umap_analysis_trigger(umap_analysis_trigger() + 1)
-    })
     
     # Update color_by choices whenever umap_data recomputes
     observe({
@@ -671,38 +724,49 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         return()
       }
       
-      req(beta_merged())
-      
-      showNotification("Running UMAP projection...", type = "message", duration = 3)
-      
-      tryCatch({
-        # Use only the samples that were not present in the original model
-        new_sample_ids <- setdiff(colnames(beta_merged()), rownames(cached_umap_model()$layout))
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
 
-        if (length(new_sample_ids) == 0) {
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running UMAP projection..." else queued,
+                       type = "message", duration = 5)
+
+      predict_task$invoke(
+        args = list(beta_path = beta_rds_path(), umap_model = cached_umap_model()),
+        app_dir = app_dir
+      )
+    })
+
+    predict_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("predict_umap", args, app_dir)
+    })
+
+    observeEvent(predict_task$status(), {
+      status <- predict_task$status()
+
+      if (identical(status, "success")) {
+        df <- tryCatch(predict_task$result(), error = function(e) NULL)
+
+        if (is.null(df)) {
           showNotification("No new samples found, all samples already exist in the model.",
                            type = "warning", duration = 5)
           return()
         }
 
-        beta_new <- beta_merged()[, new_sample_ids, drop = FALSE]
-        df <- predict_umap(beta = beta_new, umap_model = cached_umap_model())
-
         predicted_umap_df(df)
         umap_mode("predicted")
-        
-        # Update color_by choices to reflect predicted df columns
-        exclude_cols <- c("Sample", "UMAP1", "UMAP2")
-        color_cols <- setdiff(colnames(df), exclude_cols)
+
+        color_cols <- setdiff(colnames(df), c("Sample", "UMAP1", "UMAP2"))
         updateSelectInput(session, "umap_color_by",
-                          choices = color_cols,
-                          selected = "sample_origin")
-        
+                          choices = color_cols, selected = "sample_origin")
         showNotification("Projection complete.", type = "message", duration = 3)
-      }, error = function(e) {
-        showNotification(paste("Error during UMAP projection:", e$message), 
-                         type = "error", duration = 5)
-      })
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ predict_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        showNotification(paste("Error during UMAP projection:", msg),
+                         type = "error", duration = 8)
+      }
     })
     
     # Unified umap_plot — switches between training and predicted mode
@@ -728,7 +792,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         
       } else {
         # Show placeholder if analysis hasn't been run yet
-        if (umap_analysis_trigger() == 0) {
+        if (identical(umap_task$status(), "initial")) {
           return(
             ggplot2::ggplot() +
               ggplot2::annotate("text", x = 1, y = 1,
@@ -1030,76 +1094,76 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     })
     
     # Use eventReactive directly
-    global_met_data <- eventReactive(input$global_met_run_analysis, {
-      req(
-        beta_merged(), targets_merged(),
-        input$global_met_id_col,
-        input$global_met_comparison_col,
-        input$global_met_color_palette,
-        input$global_met_comparison_type,
-        APP_CACHE()
-      )
-      
-      # For custom comparison, require groups to be selected
-      if (input$global_met_comparison_type == "custom") {
-        req(input$global_met_group1, input$global_met_group2)
+    global_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_global_methylation", args, app_dir)
+    })
+
+    observeEvent(input$global_met_run_analysis, {
+      req(targets_merged(), input$global_met_id_col,
+          input$global_met_comparison_col, input$global_met_color_palette,
+          input$global_met_comparison_type)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      if (identical(input$global_met_comparison_type, "custom")) {
         validate(
           need(length(input$global_met_group1) > 0, "Please select at least one level for Group 1"),
           need(length(input$global_met_group2) > 0, "Please select at least one level for Group 2")
         )
       }
-      
-      showNotification("Running global methylation analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        # Return a list with parameters and data for plotting
-        list(
-          beta = beta_merged(),
-          targets = targets_merged(),
-          id_col = input$global_met_id_col,
-          comparison_col = input$global_met_comparison_col,
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running global methylation analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      global_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
+          targets         = targets_merged(),
+          id_col          = input$global_met_id_col,
+          comparison_col  = input$global_met_comparison_col,
           comparison_type = input$global_met_comparison_type,
-          group1 = input$global_met_group1,
-          group2 = input$global_met_group2,
-          annot = APP_CACHE()$raw_annot,
-          color_palette = PALETTES()$all_palettes[[input$global_met_color_palette]],
-          out_dir = DIRS$global_met
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing data: ", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Create plot when data is ready
+          group1          = input$global_met_group1,
+          group2          = input$global_met_group2,
+          cache_dir       = DIRS$cache,
+          annotation_pkg  = cfg$annotation_pkg,
+          palette_dir     = palette_dirs(),
+          palette_name    = input$global_met_color_palette
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(global_task$status(), "running")) {
+        shinyjs::disable("global_met_run_analysis")
+      } else {
+        shinyjs::enable("global_met_run_analysis")
+      }
+    })
+
+    global_met_data <- reactive({
+      status <- global_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running global methylation analysis..."))
+      tryCatch(global_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
+    })
+
+    # The ggplot is assembled here, from the small summary the worker returned.
     observeEvent(global_met_data(), {
       req(global_met_data())
-      
       tryCatch({
-        p <- plot_global_methylation(
-          beta = global_met_data()$beta,
-          targets = global_met_data()$targets,
-          id_col = global_met_data()$id_col,
-          comparison_col = global_met_data()$comparison_col,
-          comparison_type = global_met_data()$comparison_type,
-          group1 = global_met_data()$group1,
-          group2 = global_met_data()$group2,
-          annot = global_met_data()$annot,
-          color_palette = global_met_data()$color_palette
-        )
-        
-        # Store the plot
-        cached_global_met_plot(p)
-        
+        cached_global_met_plot(plot_global_methylation(global_met_data()))
       }, error = function(e) {
-        error_msg <- e$message
         cached_global_met_plot(NULL)
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering global methylation plot: ", error_msg))
-        )
+        showNotification(paste("Error rendering global methylation plot:", e$message),
+                         type = "error", duration = 8)
       })
     })
     
