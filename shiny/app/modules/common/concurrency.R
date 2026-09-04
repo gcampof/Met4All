@@ -113,7 +113,12 @@ m4a_ensure_workers <- function(n = m4a_max_jobs()) {
   }
 
   ok <- tryCatch({
-    mirai::daemons(n)
+    # cleanup = FALSE keeps each daemon's globalenv between tasks. Without it a
+    # worker is reset every job, so m4a_worker_init has to re-source every module
+    # and re-attach the whole stack each time -- seconds of pure overhead on an
+    # analysis that itself takes seconds. It also lets the annotation cache memo
+    # survive, so built_annot is read once per worker rather than once per job.
+    mirai::daemons(n, cleanup = FALSE)
     TRUE
   }, error = function(e) {
     warning("[workers] could not start worker pool: ", conditionMessage(e))
@@ -374,4 +379,34 @@ m4a_log_download_handler <- function(session_dir, analysis_id = NULL) {
       }
     }
   )
+}
+
+
+# --- Pre-warming --------------------------------------------------------------
+# Loading the Bioconductor stack in a worker costs ~16 s. Paid on the first
+# analysis, that turns a 4-second MDS into a 20-second one. So pay it in the
+# background as soon as the user has data, while they are still looking at it.
+#
+# Handles are kept so the tasks are not garbage collected before they run.
+m4a_warm_workers <- function(app_dir = getwd()) {
+  if (!m4a_ensure_workers()) return(invisible(FALSE))
+  if (isTRUE(getOption("m4a.workers_warmed"))) return(invisible(TRUE))
+  options(m4a.workers_warmed = TRUE)
+
+  handles <- lapply(seq_len(m4a_max_jobs()), function(i) {
+    mirai::mirai(
+      {
+        source(file.path(app_dir, "modules/common/worker_init.R"), local = FALSE)
+        get("m4a_worker_init", envir = globalenv())(app_dir)
+        # Hold the slot briefly so the next warm-up lands on a different daemon.
+        Sys.sleep(1)
+        TRUE
+      },
+      app_dir = app_dir
+    )
+  })
+
+  assign(".M4A_WARM_HANDLES", handles, envir = globalenv())
+  message("[workers] warming ", m4a_max_jobs(), " worker(s) in the background")
+  invisible(TRUE)
 }

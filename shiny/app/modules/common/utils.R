@@ -405,6 +405,11 @@ load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
       source("modules/common/all_imports.R", local = TRUE)
       cache <- setup_cache(DIRS, cfg)
       APP_CACHE(cache)
+
+      # Start the workers now, in the background, so the first analysis the user
+      # runs does not also pay for loading the stack.
+      try(m4a_warm_workers(getwd()), silent = TRUE)
+
       removeModal()
     }, error = function(e) {
       removeModal()

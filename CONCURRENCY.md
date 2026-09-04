@@ -145,6 +145,18 @@ and sources every analysis module.
 
 ### The two traps here
 
+**Daemons run with `cleanup = FALSE`, so their state persists between tasks.**
+
+Without it mirai resets a daemon after every job, so `m4a_worker_init` re-sources
+every module and re-attaches the whole stack each time -- seconds of overhead on
+an analysis that itself takes seconds. With it, init runs once per daemon and the
+annotation cache memo survives too.
+
+The trade: anything an analysis writes into the worker's `globalenv` is still
+there for the next job, which may belong to a different user. Keep analysis
+functions to local scope. The only deliberate global is the `setup_cache()` memo,
+which is read-only shared data.
+
 **The "already initialised" marker lives in `globalenv()`, not in an option.**
 
 mirai clears a daemon's `globalenv` between tasks but **R options persist**. An
@@ -312,8 +324,11 @@ Other measured figures:
 - Beta matrix: 482 MB in memory, 288 MB as `.rds`, 56 s to write.
 - Main process: **165 MB idle**, 346 MB after six analyses. The matrix is never
   loaded there.
-- Worker cold start (Bioconductor load): ~26 s, once per worker process.
-  Subsequent tasks re-run `m4a_worker_init` in ~1-2 s.
+- Worker start-up (Bioconductor load): ~16-26 s, once per worker process. It is
+  paid in the background by `m4a_warm_workers()`, triggered as soon as the user
+  has data, so the first analysis does not wait for it.
+- Measured effect on a 400k x 30 dataset: first MDS went from **20.2 s to 3.0 s**,
+  and steady-state from 3.9 s to **1.9 s**.
 
 ### Sizing
 
