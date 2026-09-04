@@ -88,11 +88,18 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # session-scoped, registered once, and released when the session ends.
     qc_resource_prefix <- paste0("qc_reports_", substr(session$token, 1, 8))
     observeEvent(DIRS$qc, once = TRUE, {
-      addResourcePath(prefix = qc_resource_prefix,
-                      directoryPath = normalizePath(DIRS$qc))
+      # Guarded: normalizePath() on a missing directory makes addResourcePath
+      # throw, and an error here takes the whole session down at start-up. QC
+      # reports simply will not be served if the directory is absent.
+      if (dir.exists(DIRS$qc)) {
+        try(addResourcePath(prefix = qc_resource_prefix,
+                            directoryPath = normalizePath(DIRS$qc)), silent = TRUE)
+      } else {
+        warning("QC directory missing, QC reports will not be served: ", DIRS$qc)
+      }
     })
     session$onSessionEnded(function() {
-      try(removeResourcePath(qc_resource_prefix), silent = TRUE)
+      suppressWarnings(try(removeResourcePath(qc_resource_prefix), silent = TRUE))
     })
     
     # Disable/enable buttons based on data type (beta or idats)

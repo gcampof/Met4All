@@ -52,7 +52,17 @@ setup_analysis_dir <- function(common_dirs, cfg, session, resume_id = NULL) {
   analysis_dir <- file.path(common_dirs$data, paste0("analysis_", analysis_id))
 
   dir.create(analysis_dir, showWarnings = FALSE, recursive = TRUE)
-  
+
+  # showWarnings = FALSE hides a permission failure, and everything downstream
+  # then breaks somewhere far less obvious (an unwritable data directory used to
+  # surface as addResourcePath killing the session at start-up). Fail here
+  # instead, and say how to fix it.
+  if (!dir.exists(analysis_dir)) {
+    stop("Cannot create the analysis directory at '", analysis_dir, "'. ",
+         "The data directory is not writable by the app. On the host, run:\n",
+         "  chmod 777 ./shiny/logs ./shiny/app/data")
+  }
+
   subdirs <- list()
   for (name in names(cfg$subdirs)) {
     sub_path <- file.path(analysis_dir, cfg$subdirs[[name]])
