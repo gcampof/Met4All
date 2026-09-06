@@ -50,20 +50,14 @@ prepare_differential_methylation_data <- function(
     baseline = NULL,      
     comparison = NULL
 ){
-  shiny::validate(
-    shiny::need(length(baseline) > 0, "Please assign at least one level to Baseline"),
-    shiny::need(length(comparison) > 0, "Please assign at least one level to Comparison"),
-    shiny::need(
-      length(intersect(baseline, comparison)) == 0,
-      paste0("Levels cannot be in both groups: ",
-             paste(intersect(baseline, comparison), collapse = ", "))
-    )
-  )
+  if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
+  if (length(comparison) == 0) stop("Please assign at least one level to Comparison")
+  if (length(intersect(baseline, comparison)) > 0) {
+    stop("Levels cannot be in both groups: ",
+         paste(intersect(baseline, comparison), collapse = ", "))
+  }
   
-  notification_id <- showNotification("Preparing differential methylation data...", 
-                                      type = "message", duration = NULL, id = "diff_prep")
-  
-  
+  message("[diff] Preparing differential methylation data")
   # Prepare inputs
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
   beta2    <- align_res$beta2
@@ -98,12 +92,8 @@ prepare_differential_methylation_data <- function(
   groups_factor <- factor(groups_recoded, levels = c("Baseline", "Comparison"))
   
   # Validate we have enough samples
-  shiny::validate(
-    shiny::need(sum(groups_factor == "Baseline") >= 2, 
-                "Need at least 2 samples in Baseline group"),
-    shiny::need(sum(groups_factor == "Comparison") >= 2, 
-                "Need at least 2 samples in Comparison group")
-  )
+  if (sum(groups_factor == "Baseline") < 2) stop("Need at least 2 samples in Baseline group")
+  if (sum(groups_factor == "Comparison") < 2) stop("Need at least 2 samples in Comparison group")
   
   # Run limma on genes for later use (FGSEA)
   desing <- model.matrix(~ groups_factor)
@@ -116,8 +106,6 @@ prepare_differential_methylation_data <- function(
     "Baseline: [", paste(baseline, collapse = ", "), "]  vs  ",
     "Comparison: [", paste(comparison, collapse = ", "), "]"
   )
-  removeNotification(id = "diff_prep")
-  
   list(
     beta_diff = beta2,
     groups_factor = groups_factor,
@@ -129,9 +117,7 @@ prepare_differential_methylation_data <- function(
 
 
 plot_diff_methylation_density <- function(diff_met_data, color_palette, out_dir) {
-  notification_id <- showNotification("Generating density plot...", 
-                                      type = "message", duration = NULL, id = "density_plot")
-  
+  message("[diff] Generating density plot")
   beta_diff <- diff_met_data$beta_diff
   groups <- diff_met_data$groups_factor
   comparison_label <- diff_met_data$comparison_label
@@ -150,45 +136,36 @@ plot_diff_methylation_density <- function(diff_met_data, color_palette, out_dir)
   color_vals <- group_levels
   matched_colors <- get_matching_colors(color_vals, color_palette)
   
-  minfi::densityPlot(
-    as.matrix(group_means_mat),
-    sampGroups = group_levels,
-    main = paste("Mean density plot - ", comparison_label),
-    xlab = "Beta",
-    pal = matched_colors
-  )
-  
-  # Save plot to disk
+  draw <- function() {
+    minfi::densityPlot(
+      as.matrix(group_means_mat),
+      sampGroups = group_levels,
+      main = paste("Mean density plot - ", comparison_label),
+      xlab = "Beta",
+      pal = matched_colors
+    )
+  }
+
+  # Rendered to files only: this runs in a worker with no screen device, and the
+  # UI displays the PNG. Previously the same plot was drawn three times.
+  png_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".png"))
+  pdf_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".pdf"))
+
   tryCatch({
-    # Save as PNG
-    png_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".png"))
-    png(png_file, width = 1000, height = 800, res = 150)
-    minfi::densityPlot(
-      as.matrix(group_means_mat),
-      sampGroups = group_levels,
-      main = paste("Mean density plot - ", comparison_label),
-      xlab = "Beta",
-      pal = matched_colors
-    )
+    # ~2x for the same reason as the CNV plots: shown at width:100%.
+    png(png_file, width = 2000, height = 1600, res = 300)
+    on.exit(if (dev.cur() != 1L) dev.off(), add = TRUE)
+    draw()
     dev.off()
-    
-    # Save as PDF
-    pdf_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".pdf"))
+
     pdf(pdf_file, width = 10, height = 8)
-    minfi::densityPlot(
-      as.matrix(group_means_mat),
-      sampGroups = group_levels,
-      main = paste("Mean density plot - ", comparison_label),
-      xlab = "Beta",
-      pal = matched_colors
-    )
+    draw()
     dev.off()
-    
   }, error = function(e) {
     warning("Could not save density plot: ", e$message)
   })
-  
-  removeNotification(id = "density_plot")
+
+  png_file
 }
 
 
@@ -198,17 +175,13 @@ get_dmps <- function(diff_met_data,
                      with_champ,
                      out_dir
 ){
-  notification_id <- showNotification("Computing DMPs...", 
-                                      type = "message", duration = NULL, id = "dmps_calc")
-  
+  message("[diff] Computing DMPs")
   beta_diff <- diff_met_data$beta_diff
   groups <- diff_met_data$groups_factor
   
   if(!with_champ) {
     # run with limma
-    removeNotification(id = "dmps_calc")
-    notification_id <- showNotification("Running limma, please wait ...", 
-                                        type = "message", duration = NULL, id = "dmps_calc")
+    message("[diff] Running limma")
     desing <- diff_met_data$limma_desing
     fit  <- limma::lmFit(beta_diff, desing)
     fit2 <- limma::eBayes(fit)
@@ -222,9 +195,7 @@ get_dmps <- function(diff_met_data,
       number = Inf
     )
   } else {
-    removeNotification(id = "dmps_calc")
-    notification_id <- showNotification("Running ChAMP, please wait this might take a while ...", 
-                                        type = "message", duration = NULL, id = "dmps_calc")
+    message("[diff] Running ChAMP, this might take a while")
     # run with champ
     pheno <- data.frame(group = groups)
     rownames(pheno) <- colnames(beta_diff)
@@ -276,7 +247,6 @@ get_dmps <- function(diff_met_data,
     warning("Could not save DMPs: ", e$message)
   })
   
-  removeNotification(id = "dmps_calc")
   return(dmps)
 }
 
@@ -286,17 +256,13 @@ get_dmrs <- function(
     with_champ,
     out_dir
 ){
-  shiny::validate(
-    shiny::need(with_champ, "DMRs can only be calculated when 'Run ChAMP' is activated"),
-  )
+  if (!isTRUE(with_champ)) stop("DMRs can only be calculated when 'Run ChAMP' is activated")
   beta_diff <- diff_met_data$beta_diff
   groups <- diff_met_data$groups_factor
   pheno <- data.frame(group = groups)
   rownames(pheno) <- colnames(beta_diff)
   
-  notification_id <- showNotification("Computing DMRs...", 
-                                      type = "message", duration = NULL, id = "dmrs_calc")
-  
+  message("[diff] Computing DMRs")
   # Fixed values
   champ_minProbes = 5
   champ_cores = m4a_threads_per_job()
@@ -317,9 +283,7 @@ get_dmrs <- function(
   on.exit({
     if (champ_dev %in% grDevices::dev.list()) grDevices::dev.off(champ_dev)
   }, add = TRUE)
-  removeNotification(id = "dmrs_calc")
-  notification_id <- showNotification("Running ChAMP, please wait this might take a while ...", 
-                                      type = "message", duration = NULL, id = "dmrs_calc")
+  message("[diff] Running ChAMP, please wait this might take a while ")
   dmrs_champ_res <- tryCatch({
     ChAMP::champ.DMR(
       beta          = as.matrix(beta_diff),
@@ -347,10 +311,7 @@ get_dmrs <- function(
     rownames(dmrs) <- NULL
   }
   
-  removeNotification(id = "dmrs_calc")
-  notification_id <- showNotification("ChAMP Finished running!", 
-                                      type = "message", duration = NULL, id = "dmrs_calc")
-  
+  message("[diff] ChAMP Finished running!")
   # Save DMRs to disk
   tryCatch({
     if (nrow(dmrs) > 0) {
@@ -370,7 +331,6 @@ get_dmrs <- function(
     warning("Could not save DMRs: ", e$message)
   })
   
-  removeNotification(id = "dmrs_calc")
   dmrs
 }
 
@@ -397,7 +357,7 @@ get_dmgs <- function(
       
       # Save as XLSX if openxlsx is available
       if (requireNamespace("openxlsx", quietly = TRUE)) {
-        xlsx_file <- file.path(out_dir, paste0("dmgs_", Sys.Date(), "xlsx"))
+        xlsx_file <- file.path(out_dir, paste0("dmgs_", Sys.Date(), ".xlsx"))
         openxlsx::write.xlsx(dmgs, xlsx_file, row.names = FALSE)
       }
     } else {
@@ -417,10 +377,7 @@ get_fgsea <- function(
     selected_pathway,
     out_dir
 ){
-  notification_id <- showNotification(paste("Running FGSEA on", selected_pathway, "pathways..."), 
-                                      type = "message", duration = NULL, id = "fgsea_calc")
-                                      
-                                      
+  message("[diff] Running FGSEA on")
   beta_diff <- diff_met_data$beta_diff
   toptab_gene_all <- diff_met_data$toptab_gene_all
 
@@ -456,7 +413,98 @@ get_fgsea <- function(
     warning("Could not save FGSEA results: ", e$message)
   })
   
-  removeNotification(id = "fgsea_calc")
   return(fgsea_out)
 }
 
+
+
+# Whole differential pipeline, run inside one worker job.
+#
+# beta_diff (the subsetted beta matrix) is the largest object in this analysis and
+# is needed by every step, so the entire pipeline runs where it lives and only the
+# display tables and file paths come back. Inputs are a path plus small values;
+# `targets` is passed by value because the samplesheet is editable in-session and
+# the copy on disk may be stale.
+#
+# DMPs are fitted at fdr_max (the top of the UI slider) so the caller can apply
+# the user's FDR, logFC and row-count choices as cheap post-filters instead of
+# re-running the fit on every slider drag.
+run_differential_analysis <- function(
+    beta_path,
+    targets,
+    cache_dir,
+    pathways_dir,
+    annotation_pkg,
+    gene_set,
+    palette_dir,
+    palette_name,
+    id_col,
+    comparison_col,
+    baseline,
+    comparison,
+    with_champ,
+    fdr_max,
+    out_dir
+) {
+  n_steps <- if (isTRUE(with_champ)) 7L else 6L
+  m4a_progress(0, n_steps, "Loading beta matrix and annotation")
+  beta  <- readRDS(beta_path)
+  cache <- setup_cache(
+    DIRS = list(cache = cache_dir, pathways = pathways_dir),
+    cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
+  )
+
+  m4a_progress(1, n_steps, "Summarising probes to genes")
+  diff <- prepare_differential_methylation_data(
+    beta, targets, cache$built_annot,
+    id_col, comparison_col, baseline, comparison
+  )
+
+  m4a_progress(2, n_steps, "Fitting differentially methylated positions")
+  # Fitted once at the permissive end of the slider; filtered by the caller.
+  dmps_all <- get_dmps(diff, fdr_cut = fdr_max, lfc_cut = 0,
+                       with_champ = with_champ, out_dir = out_dir)
+
+  m4a_progress(3, n_steps, "Collecting differentially methylated genes")
+  dmgs <- get_dmgs(diff, 0, out_dir)
+
+  m4a_progress(4, n_steps, "Running pathway enrichment (GO, KEGG, Hallmark)")
+  fgsea <- list(
+    gobp     = get_fgsea(diff, cache$pathways, "gobp", out_dir),
+    kegg     = get_fgsea(diff, cache$pathways, "kegg", out_dir),
+    hallmark = get_fgsea(diff, cache$pathways, "hallmark", out_dir)
+  )
+
+  # ChAMP DMRs are opt-in and by far the slowest step.
+  if (isTRUE(with_champ)) m4a_progress(5, n_steps, "Detecting DMRs with ChAMP (slow)")
+  dmrs <- if (isTRUE(with_champ)) {
+    tryCatch(get_dmrs(diff, TRUE, out_dir),
+             error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
+  } else {
+    data.frame()
+  }
+
+  palettes <- prepare_color_palettes(palette_dir)
+  pal_fn   <- palettes$all_palettes[[palette_name]]
+  if (is.null(pal_fn)) pal_fn <- palettes$all_palettes[[1]]
+
+  m4a_progress(n_steps - 1L, n_steps, "Drawing the density plot")
+  density_png <- tryCatch(
+    plot_diff_methylation_density(diff, pal_fn, out_dir),
+    error = function(e) { warning("Density plot failed: ", conditionMessage(e)); NULL }
+  )
+
+  m4a_progress(n_steps, n_steps, "Differential methylation complete")
+
+  list(
+    dmps_all         = dmps_all,
+    dmrs             = dmrs,
+    dmgs             = dmgs,
+    fgsea            = fgsea,
+    density_png      = density_png,
+    comparison_label = diff$comparison_label,
+    with_champ       = isTRUE(with_champ),
+    n_baseline       = sum(diff$groups_factor == "Baseline"),
+    n_comparison     = sum(diff$groups_factor == "Comparison")
+  )
+}

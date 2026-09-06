@@ -1,12 +1,15 @@
+# Ceiling of the FDR slider. The DMP fit runs once at this value in the worker so
+# that the user's FDR choice is a cheap post-filter; the two must stay in step.
+DIFF_FDR_MAX <- 0.2
+
 # Module UI function - Improved version matching heatmap aesthetics
 differential_met_ui <- function(ns){
   div(
-    class = "d-flex gap-3 mt-3",
-    style = "align-items: flex-start;",
+    class = "analysis-row",
     
     # LEFT PANEL
     div(
-      style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
+      class = "analysis-side",
       
       # ---- TOP ACTION BAR (Always visible) ----
       div(
@@ -69,7 +72,7 @@ differential_met_ui <- function(ns){
           
           tags$label("FDR cutoff", style = "font-size: 0.78rem;"),
           sliderInput(ns("diff_met_fdr_cut"), label = NULL,
-                      min = 0.001, max = 0.2, value = 0.05, step = 0.001, ticks = FALSE),
+                      min = 0.001, max = DIFF_FDR_MAX, value = 0.05, step = 0.001, ticks = FALSE),
           
           tags$label("logFC cutoff", style = "font-size: 0.78rem;"),
           sliderInput(ns("diff_met_lfc_cut"), label = NULL,
@@ -111,8 +114,7 @@ differential_met_ui <- function(ns){
     # RIGHT PANEL — tabset results
     # ================================================================
     div(
-      class = "flex-grow-1",
-      style = "min-width: 0; display: flex; flex-direction: column;",
+      class = "analysis-main",
       
       tabsetPanel(
         id   = ns("diff_met_tabset"),

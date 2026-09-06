@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install CRAN packages via pak for speed
 RUN R -e 'install.packages("pak", repos = "https://r-lib.github.io/p/pak/dev/")'
-RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "here", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
+RUN R -e 'pak::pkg_install(c("shiny", "shinyWidgets", "shinyjs", "bslib", "future", "mirai", "openxlsx","DT", "dplyr", "ggplot2", "ggokabeito", "viridis", "RColorBrewer", "fgsea", "msigdbr", "plotly", "doParallel", "readxl", "vroom", "archive", "foreach", "stringr", "tibble", "umap", "uwot", "svglite", "config", "here", "qs2", "fst", "ggrepel", "gridExtra", "colorspace", "ggpubr", "rtracklayer"))'
 
 # Install BiocManager first
 RUN R -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org")'
@@ -43,6 +43,21 @@ RUN R -e 'devtools::install_github("hovestadtlab/conumee2", subdir = "conumee2",
 # Create ExperimentHub cache dir and fix permissions
 RUN mkdir -p /home/rstudio/.cache/R/ExperimentHub && \
     chown -R rstudio:rstudio /home/rstudio/.cache
+
+# Same runtime settings as the shiny image, so anything reproduced here behaves
+# the way it does in production.
+#   M4A_MAX_JOBS        concurrent analyses (worker pool size)
+#   M4A_THREADS_PER_JOB threads inside each worker
+ENV OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    M4A_MAX_JOBS=2 \
+    M4A_THREADS_PER_JOB=2
+
+# The annotation cache is not baked into this image (its build context is
+# ./rstudio and it has no copy of the app). Point it at the mounted project
+# instead: the first setup_cache() call builds it there and every later session
+# reuses it, and it survives container restarts because it lives on the host.
+ENV M4A_CACHE_DIR=/home/rstudio/project/shiny/app/cache
 
 # Default workdir inside container
 WORKDIR /home/rstudio/project

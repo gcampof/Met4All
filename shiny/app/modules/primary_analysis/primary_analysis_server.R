@@ -9,7 +9,7 @@ source("modules/primary_analysis/differential/differential_utils.R")
 source("modules/primary_analysis/cnv/cnv_utils.R")
 source("modules/primary_analysis/samplesheet_ui.R")
 
-primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
+primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
@@ -23,9 +23,44 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # Reactive states
     umap_data <- reactiveVal(NULL)
     current_view <- reactiveVal(NULL)
+
+    # Path to the beta matrix on disk, used by every worker-backed analysis.
+    # beta_merged is only ever assigned at load time so the file and the reactive
+    # cannot diverge; targets, by contrast, is edited in-session and so is always
+    # passed by value.
+    beta_rds_path <- reactive({
+      file.path(DIRS$beta, "merged", "beta_merged.rds")
+    })
+    # Uploaded palettes live in this session's own directory, so one user's
+    # upload does not turn up in every other user's dropdowns.
+    session_palette_dir <- file.path(DIRS$analysis, "palettes")
+    palette_dirs <- function() c(DIRS$custom_color_palette, session_palette_dir)
+    palettes_version <- reactiveVal(0)
+
     PALETTES <- reactive({
-      do.call(reactiveValues,
-              prepare_color_palettes(DIRS$custom_color_palette))
+      palettes_version()
+      do.call(reactiveValues, prepare_color_palettes(palette_dirs()))
+    })
+
+    # The "Add Color Palette" input previously had no observer at all: uploading a
+    # file silently did nothing.
+    observeEvent(input$custom_palette_file, {
+      req(input$custom_palette_file)
+      dir.create(session_palette_dir, showWarnings = FALSE, recursive = TRUE)
+
+      res <- load_new_palette(
+        file_path    = input$custom_palette_file$datapath,
+        palette_name = tools::file_path_sans_ext(input$custom_palette_file$name),
+        palette_dir  = session_palette_dir
+      )
+
+      if (isTRUE(res$success)) {
+        palettes_version(palettes_version() + 1)
+        showNotification(res$message, type = "message", duration = 4)
+      } else {
+        showNotification(paste("Could not add palette:", res$message),
+                         type = "error", duration = 8)
+      }
     })
     
     # Enable IDAT-only controls if type is IDATS
@@ -53,17 +88,27 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     # session-scoped, registered once, and released when the session ends.
     qc_resource_prefix <- paste0("qc_reports_", substr(session$token, 1, 8))
     observeEvent(DIRS$qc, once = TRUE, {
-      addResourcePath(prefix = qc_resource_prefix,
-                      directoryPath = normalizePath(DIRS$qc))
+      # Guarded: normalizePath() on a missing directory makes addResourcePath
+      # throw, and an error here takes the whole session down at start-up. QC
+      # reports simply will not be served if the directory is absent.
+      if (dir.exists(DIRS$qc)) {
+        try(addResourcePath(prefix = qc_resource_prefix,
+                            directoryPath = normalizePath(DIRS$qc)), silent = TRUE)
+      } else {
+        warning("QC directory missing, QC reports will not be served: ", DIRS$qc)
+      }
     })
     session$onSessionEnded(function() {
-      try(removeResourcePath(qc_resource_prefix), silent = TRUE)
+      suppressWarnings(try(removeResourcePath(qc_resource_prefix), silent = TRUE))
     })
     
     # Disable/enable buttons based on data type (beta or idats)
     observe({
       req(length(names(input)) > 0)
-      req(beta_merged() | !is.null(targets_merged()))
+      # `|` here required numeric/logical operands. It worked only while
+      # beta_merged() held the matrix itself; it is now a small descriptor list,
+      # which made this throw and take the session down as soon as data loaded.
+      req(!is.null(beta_merged()) || !is.null(targets_merged()))
       
       if (!view_initialized()) {
         if (load_data_return$type_selected() == "IDATS") {
@@ -174,11 +219,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       update_active_button("nav_cnv")
       show_view("view_cnv", "CNV")
     }) 
-    observeEvent(input$nav_cnv, {
-      current_view("cnv")
-      update_active_button("nav_cnv")
-      show_view("view_cnv", "CNV")
-    }) 
     observeEvent(input$nav_samplesheet, {
       current_view("samplesheet")
       update_active_button("nav_samplesheet")
@@ -191,8 +231,22 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         "beta_merged.csv"
       },
       content = function(file) {
+        # In beta-upload mode the user's own CSV is already here; in IDAT mode it
+        # is generated now rather than on every run. fwrite is ~11x faster than
+        # write.csv on a matrix this size (~2 s vs ~24 s for 800k x 70).
         src <- file.path(DIRS$beta, "merged", "beta_merged.csv")
-        file.copy(src, file)
+        if (file.exists(src)) {
+          file.copy(src, file)
+          return(invisible(NULL))
+        }
+
+        rds <- file.path(DIRS$beta, "merged", "beta_merged.rds")
+        validate(need(file.exists(rds), "Beta matrix not available yet."))
+        beta <- readRDS(rds)
+        data.table::fwrite(
+          data.table::data.table(CpG = rownames(beta), beta),
+          file
+        )
       }
     )
     
@@ -242,8 +296,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           list(
             src = boxplot_path,
             contentType = "image/png",
-            width = 1000,
-            height = 650
+            width = "100%"
           )
         }, deleteFile = FALSE)
       }
@@ -295,28 +348,46 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- MDS PLOT LOGIC ---
     # Reactive trigger for analysis
-    mds_analysis_trigger <- reactiveVal(0)
     cached_mds_plot <- reactiveVal(NULL)
     
-    # Prepare MDS data (only runs when trigger changes)
-    mds_data <- eventReactive(mds_analysis_trigger(), {
-      req(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
-      validate(need(!is.null(beta_merged()), "Beta data missing"))
-      validate(need(!is.null(targets_merged()), "Targets data missing"))
-      
-      showNotification("Running MDS analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_mds_data(beta_merged(), targets_merged(), input$mds_id_col, input$mds_top_cpgs)
-      }, error = function(e) {
-        shiny::validate(shiny::need(FALSE, paste0("Error preparing MDS data: ", e$message)))
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Run analysis when button is clicked
+    mds_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_mds_data", args, app_dir, session_dir = DIRS$analysis)
+    })
+
     observeEvent(input$mds_run_analysis, {
-      mds_analysis_trigger(mds_analysis_trigger() + 1)
+      req(targets_merged())
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running MDS analysis..." else queued,
+                       type = "message", duration = 5)
+
+      mds_task$invoke(
+        args = list(
+          beta_path = beta_rds_path(),
+          targets   = targets_merged(),
+          id_col    = input$mds_id_col,
+          top_cpgs  = input$mds_top_cpgs
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(mds_task$status(), "running")) shinyjs::disable("mds_run_analysis")
+      else shinyjs::enable("mds_run_analysis")
+    })
+
+    mds_data <- reactive({
+      status <- mds_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running MDS analysis..."))
+      tryCatch(mds_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
     })
     
     # Update color_by choices whenever mds_data recomputes
@@ -334,7 +405,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     output$mds_plot <- renderPlot({
       # Show placeholder if analysis hasn't been run
-      if (mds_analysis_trigger() == 0) {
+      if (identical(mds_task$status(), "initial")) {
         return(
           ggplot2::ggplot() +
             ggplot2::annotate("text", x = 1, y = 1, 
@@ -354,7 +425,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
       })
-    }, height = 750, width = 1200)
+    }, res = 110)
     
     output$mds_download_png <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
@@ -385,31 +456,47 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- PCA PLOT LOGIC
     # Reactive trigger for analysis
-    pca_analysis_trigger <- reactiveVal(0)
     cached_pca_plot <- reactiveVal(NULL)
     
     # Prepare PCA data (only runs when trigger changes)
-    pca_data <- eventReactive(pca_analysis_trigger(), {
-      req(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
-      
-      validate(need(!is.null(beta_merged()), "Beta data missing"))
-      validate(need(!is.null(targets_merged()), "Targets data missing"))
-      
-      showNotification("Running PCA analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_pca_data(beta_merged(), targets_merged(), input$pca_id_col, input$pca_top_cpgs)
-      }, error = function(e) {
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing PCA data: ", e$message))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Run analysis when button is clicked
+    pca_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_pca_data", args, app_dir, session_dir = DIRS$analysis)
+    })
+
     observeEvent(input$pca_run_analysis, {
-      pca_analysis_trigger(pca_analysis_trigger() + 1)
+      req(targets_merged())
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running PCA analysis..." else queued,
+                       type = "message", duration = 5)
+
+      pca_task$invoke(
+        args = list(
+          beta_path = beta_rds_path(),
+          targets   = targets_merged(),
+          id_col    = input$pca_id_col,
+          top_cpgs  = input$pca_top_cpgs
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(pca_task$status(), "running")) shinyjs::disable("pca_run_analysis")
+      else shinyjs::enable("pca_run_analysis")
+    })
+
+    pca_data <- reactive({
+      status <- pca_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running PCA analysis..."))
+      tryCatch(pca_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
     })
     
     # Update color_by choices whenever pca_data recomputes
@@ -427,7 +514,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     output$pca_plot <- renderPlot({
       # Show placeholder if analysis hasn't been run
-      if (pca_analysis_trigger() == 0) {
+      if (identical(pca_task$status(), "initial")) {
         return(
           ggplot2::ggplot() +
             ggplot2::annotate("text", x = 1, y = 1, 
@@ -458,7 +545,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
           shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
         )
       })
-    }, height = 750, width = 1200)
+    }, res = 110)
     
     output$pca_download_png <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
@@ -489,58 +576,77 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- UMAP PLOT LOGIC ---
     # Reactive trigger for analysis
-    umap_analysis_trigger <- reactiveVal(0)
     cached_umap_plot <- reactiveVal(NULL)
     cached_umap_model <- reactiveVal(NULL)
     
     # Prepare UMAP data (only runs when trigger changes)
-    umap_data <- eventReactive(umap_analysis_trigger(), {
-      req(
-        beta_merged(), targets_merged(),
-        input$umap_top_cpgs, input$umap_min_dist,
-        input$umap_n_neighbors, input$umap_metric,
-        input$umap_knn, input$umap_consensus_k_max,
-        input$umap_id_col, input$umap_seed
+    umap_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_umap_data", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(input$umap_run_analysis, {
+      req(targets_merged(),
+          input$umap_top_cpgs, input$umap_min_dist,
+          input$umap_n_neighbors, input$umap_metric,
+          input$umap_knn, input$umap_consensus_k_max,
+          input$umap_id_col, input$umap_seed)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running UMAP analysis..." else queued,
+                       type = "message", duration = 5)
+
+      umap_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
+          targets         = targets_merged(),
+          top_cpgs        = input$umap_top_cpgs,
+          min_dist        = input$umap_min_dist,
+          n_neighbors     = input$umap_n_neighbors,
+          metric          = input$umap_metric,
+          knn             = input$umap_knn,
+          consensus_k_max = input$umap_consensus_k_max,
+          id_col          = input$umap_id_col,
+          seed            = input$umap_seed
+        ),
+        app_dir = app_dir
       )
-      
-      showNotification("Running UMAP analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        result <- prepare_umap_data(
-          beta_merged(),
-          targets_merged(),
-          input$umap_top_cpgs,
-          input$umap_min_dist,
-          input$umap_n_neighbors,
-          input$umap_metric,
-          input$umap_knn,
-          input$umap_consensus_k_max,
-          input$umap_id_col,
-          input$umap_seed
-        )
-        
-        # Update targets df with consensus clusters
-        targets_merged(result$targets_updated)
-        
-        # Store UMAP model for download
-        cached_umap_model(result$um_model)
-        
-        result$umap_df
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing UMAP data: ", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
+    })
+
+    observe({
+      if (identical(umap_task$status(), "running")) shinyjs::disable("umap_run_analysis")
+      else shinyjs::enable("umap_run_analysis")
+    })
+
+    umap_result <- reactive({
+      status <- umap_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running UMAP analysis..."))
+      tryCatch(umap_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error preparing UMAP data: ",
+                                             conditionMessage(e))))
+                 NULL
+               })
+    })
+
+    # Side effects belong here, not inside the reactive above: writing the
+    # clusters back and stashing the model must happen once per completed run.
+    observeEvent(umap_task$status(), {
+      req(identical(umap_task$status(), "success"))
+      res <- tryCatch(umap_task$result(), error = function(e) NULL)
+      req(!is.null(res))
+      targets_merged(res$targets_updated)
+      cached_umap_model(res$um_model)
+    })
+
+    umap_data <- reactive({
+      req(umap_result())
+      umap_result()$umap_df
+    })
     
     # Run analysis when button is clicked
-    observeEvent(input$umap_run_analysis, {
-      umap_mode("training")
-      predicted_umap_df(NULL)
-      umap_analysis_trigger(umap_analysis_trigger() + 1)
-    })
     
     # Update color_by choices whenever umap_data recomputes
     observe({
@@ -628,38 +734,49 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         return()
       }
       
-      req(beta_merged())
-      
-      showNotification("Running UMAP projection...", type = "message", duration = 3)
-      
-      tryCatch({
-        # Use only the samples that were not present in the original model
-        new_sample_ids <- setdiff(colnames(beta_merged()), rownames(cached_umap_model()$layout))
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
 
-        if (length(new_sample_ids) == 0) {
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) "Running UMAP projection..." else queued,
+                       type = "message", duration = 5)
+
+      predict_task$invoke(
+        args = list(beta_path = beta_rds_path(), umap_model = cached_umap_model()),
+        app_dir = app_dir
+      )
+    })
+
+    predict_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("predict_umap", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(predict_task$status(), {
+      status <- predict_task$status()
+
+      if (identical(status, "success")) {
+        df <- tryCatch(predict_task$result(), error = function(e) NULL)
+
+        if (is.null(df)) {
           showNotification("No new samples found, all samples already exist in the model.",
                            type = "warning", duration = 5)
           return()
         }
 
-        beta_new <- beta_merged()[, new_sample_ids, drop = FALSE]
-        df <- predict_umap(beta = beta_new, umap_model = cached_umap_model())
-
         predicted_umap_df(df)
         umap_mode("predicted")
-        
-        # Update color_by choices to reflect predicted df columns
-        exclude_cols <- c("Sample", "UMAP1", "UMAP2")
-        color_cols <- setdiff(colnames(df), exclude_cols)
+
+        color_cols <- setdiff(colnames(df), c("Sample", "UMAP1", "UMAP2"))
         updateSelectInput(session, "umap_color_by",
-                          choices = color_cols,
-                          selected = "sample_origin")
-        
+                          choices = color_cols, selected = "sample_origin")
         showNotification("Projection complete.", type = "message", duration = 3)
-      }, error = function(e) {
-        showNotification(paste("Error during UMAP projection:", e$message), 
-                         type = "error", duration = 5)
-      })
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ predict_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        showNotification(paste("Error during UMAP projection:", msg),
+                         type = "error", duration = 8)
+      }
     })
     
     # Unified umap_plot — switches between training and predicted mode
@@ -685,7 +802,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         
       } else {
         # Show placeholder if analysis hasn't been run yet
-        if (umap_analysis_trigger() == 0) {
+        if (identical(umap_task$status(), "initial")) {
           return(
             ggplot2::ggplot() +
               ggplot2::annotate("text", x = 1, y = 1,
@@ -719,7 +836,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         })
       }
       
-    }, height = 750, width = 1200)
+    }, res = 110)
     
     # Download handlers
     output$umap_download_png <- downloadHandler(
@@ -755,74 +872,85 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     heatmap_analysis_trigger <- reactiveVal(0)
     
     # Store the rendered heatmap plot for downloads
-    cached_heatmap_ht <- reactiveVal(NULL)
-    
-    # Reactive that only runs when trigger changes or parameters change
-    heatmap_cc_data <- eventReactive(input$heatmap_run_analysis, {
-      req(
-        beta_merged(), targets_merged(),
-        input$heatmap_id_col,
-        input$heatmap_cc_kmax, input$heatmap_cc_reps,
-        input$heatmap_cc_pItem, input$heatmap_cc_seed,
-        input$heatmap_color_palette
+    # Consensus clustering runs in a worker: it is the expensive half, and at the
+    # top of the CpG slider the row dendrogram alone builds a ~800 MB matrix.
+    heatmap_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_heatmap_cc", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(input$heatmap_run_analysis, {
+      req(beta_merged(), targets_merged(), input$heatmap_id_col,
+          input$heatmap_cc_kmax, input$heatmap_cc_reps,
+          input$heatmap_cc_pItem, input$heatmap_cc_seed,
+          input$heatmap_color_palette)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running heatmap analysis..." else queued,
+        type = "message", duration = 5
       )
-      
-      showNotification("Running heatmap analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        prepare_heatmap_cc(
-          beta            = beta_merged(),
+
+      heatmap_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
           targets         = targets_merged(),
           id_col          = input$heatmap_id_col,
           annotation_cols = input$heatmap_annotation_cols,
-          color_palette   = PALETTES()$all_palettes[[input$heatmap_color_palette]],
+          palette_dir     = palette_dirs(),
+          palette_name    = input$heatmap_color_palette,
           top_cpgs        = input$heatmap_top,
           cc_kmax         = input$heatmap_cc_kmax,
           cc_reps         = input$heatmap_cc_reps,
           cc_pItem        = input$heatmap_cc_pItem,
           cc_seed         = input$heatmap_cc_seed
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error:", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Separate reactive for plot parameters (doesn't trigger recomputation)
-    heatmap_plot_params <- reactive({
-      list(
-        cc_data = heatmap_cc_data(),
-        row_k = input$heatmap_row_k,
-        col_k = input$heatmap_col_k,
-        show_row_names = input$heatmap_show_row_names,
-        show_col_names = input$heatmap_show_col_names,
-        legend_pos = input$heatmap_legend_position,
-        annot_legend_pos = input$heatmap_annotation_legend_position
+        ),
+        app_dir = app_dir
       )
     })
-    
-    # Create plot only when parameters OR data changes
+
+    observe({
+      if (identical(heatmap_task$status(), "running")) {
+        shinyjs::disable("heatmap_run_analysis")
+      } else {
+        shinyjs::enable("heatmap_run_analysis")
+      }
+    })
+
+    heatmap_cc_data <- reactive({
+      status <- heatmap_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "Consensus clustering running..."))
+      tryCatch(
+        heatmap_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+          NULL
+        }
+      )
+    })
+
+    # Appearance changes rebuild only the Heatmap object, which is now cheap
+    # because the clustering arrived with the worker result. bindCache went with
+    # it: its key hashed the whole cc_data, and being app-scoped it could serve
+    # one session a plot computed for another.
     cached_heatmap_result <- reactive({
-      req(heatmap_plot_params()$cc_data)
-      notification_id <- showNotification("Rendering heatmap, please wait...", type = "message", duration = NULL)
-      tryCatch({
-        result <- plot_heatmap(
-          cc_data        = heatmap_plot_params()$cc_data,
-          rowK           = heatmap_plot_params()$row_k,
-          colK           = heatmap_plot_params()$col_k,
-          show_row_names = heatmap_plot_params()$show_row_names,
-          show_col_names = heatmap_plot_params()$show_col_names
-        )
-        removeNotification(notification_id)
-        result
-      }, error = function(e) {
-        shiny::validate(shiny::need(FALSE, paste0("Error rendering heatmap: ", e$message)))
-        NULL
-      })
-    }) %>% bindCache(heatmap_plot_params())
+      req(heatmap_cc_data())
+      tryCatch(
+        plot_heatmap(
+          cc_data        = heatmap_cc_data(),
+          rowK           = input$heatmap_row_k,
+          colK           = input$heatmap_col_k,
+          show_row_names = input$heatmap_show_row_names,
+          show_col_names = input$heatmap_show_col_names
+        ),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error rendering heatmap: ", conditionMessage(e))))
+          NULL
+        }
+      )
+    })
     
     # Helper accessors
     cached_heatmap_ht <- reactive({
@@ -864,7 +992,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
         padding                = grid::unit(c(10, 10, 10, 10), "mm")
       )
       removeNotification("ht_render")
-    }, height = 750, width = 1000)
+    }, res = 110)
     
     # Download handlers — notify user since redraw is needed for base graphics
     output$heatmap_download_png <- downloadHandler(
@@ -976,83 +1104,83 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     })
     
     # Use eventReactive directly
-    global_met_data <- eventReactive(input$global_met_run_analysis, {
-      req(
-        beta_merged(), targets_merged(),
-        input$global_met_id_col,
-        input$global_met_comparison_col,
-        input$global_met_color_palette,
-        input$global_met_comparison_type,
-        APP_CACHE()
-      )
-      
-      # For custom comparison, require groups to be selected
-      if (input$global_met_comparison_type == "custom") {
-        req(input$global_met_group1, input$global_met_group2)
+    global_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_global_methylation", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(input$global_met_run_analysis, {
+      req(targets_merged(), input$global_met_id_col,
+          input$global_met_comparison_col, input$global_met_color_palette,
+          input$global_met_comparison_type)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      if (identical(input$global_met_comparison_type, "custom")) {
         validate(
           need(length(input$global_met_group1) > 0, "Please select at least one level for Group 1"),
           need(length(input$global_met_group2) > 0, "Please select at least one level for Group 2")
         )
       }
-      
-      showNotification("Running global methylation analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        # Return a list with parameters and data for plotting
-        list(
-          beta = beta_merged(),
-          targets = targets_merged(),
-          id_col = input$global_met_id_col,
-          comparison_col = input$global_met_comparison_col,
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running global methylation analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      global_task$invoke(
+        args = list(
+          beta_path       = beta_rds_path(),
+          targets         = targets_merged(),
+          id_col          = input$global_met_id_col,
+          comparison_col  = input$global_met_comparison_col,
           comparison_type = input$global_met_comparison_type,
-          group1 = input$global_met_group1,
-          group2 = input$global_met_group2,
-          annot = APP_CACHE()$raw_annot,
-          color_palette = PALETTES()$all_palettes[[input$global_met_color_palette]],
-          out_dir = DIRS$global_met
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error preparing data: ", error_msg))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
-    
-    # Create plot when data is ready
+          group1          = input$global_met_group1,
+          group2          = input$global_met_group2,
+          cache_dir       = DIRS$cache,
+          annotation_pkg  = cfg$annotation_pkg,
+          palette_dir     = palette_dirs(),
+          palette_name    = input$global_met_color_palette
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(global_task$status(), "running")) {
+        shinyjs::disable("global_met_run_analysis")
+      } else {
+        shinyjs::enable("global_met_run_analysis")
+      }
+    })
+
+    global_met_data <- reactive({
+      status <- global_task$status()
+      validate(need(status != "initial", "Press Run Analysis to start."))
+      validate(need(status != "running", "Running global methylation analysis..."))
+      tryCatch(global_task$result(),
+               error = function(e) {
+                 validate(need(FALSE, paste0("Error: ", conditionMessage(e))))
+                 NULL
+               })
+    })
+
+    # The ggplot is assembled here, from the small summary the worker returned.
     observeEvent(global_met_data(), {
       req(global_met_data())
-      
       tryCatch({
-        p <- plot_global_methylation(
-          beta = global_met_data()$beta,
-          targets = global_met_data()$targets,
-          id_col = global_met_data()$id_col,
-          comparison_col = global_met_data()$comparison_col,
-          comparison_type = global_met_data()$comparison_type,
-          group1 = global_met_data()$group1,
-          group2 = global_met_data()$group2,
-          annot = global_met_data()$annot,
-          color_palette = global_met_data()$color_palette
-        )
-        
-        # Store the plot
-        cached_global_met_plot(p)
-        
+        cached_global_met_plot(plot_global_methylation(global_met_data()))
       }, error = function(e) {
-        error_msg <- e$message
         cached_global_met_plot(NULL)
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering global methylation plot: ", error_msg))
-        )
+        showNotification(paste("Error rendering global methylation plot:", e$message),
+                         type = "error", duration = 8)
       })
     })
     
     # Plot output - just renders the cached plot
     output$global_met_plot <- renderPlot({
       req(cached_global_met_plot())
-    }, height = 750, width = 1200)
+    }, res = 110)
     
     # Download handlers using cached plot
     output$global_met_download_png <- downloadHandler(
@@ -1084,30 +1212,66 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     
     # --- DIFFERENTIAL METHYLATION LOGIC ---
     # Use eventReactive directly
-    diff_met_data <- eventReactive(input$diff_met_run_analysis, {
-      req(beta_merged(), targets_merged(), input$diff_met_id_col, APP_CACHE())
-      
-      showNotification("Running differential methylation analysis...", type = "message", duration = 3)
-      
-      tryCatch({
-        result <- prepare_differential_methylation_data(
-          beta_merged(), 
-          targets_merged(), 
-          APP_CACHE()$built_annot,
-          input$diff_met_id_col,
-          input$diff_met_comparison_col,
-          input$diff_met_baseline,
-          input$diff_met_comparison
-        )
-        result
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, HTML(paste0("Error preparing differential methylation data: ", error_msg)))
-        )
-        NULL
-      })
-    }, ignoreNULL = TRUE)
+    # The whole differential pipeline runs in one worker job: every step needs
+    # beta_diff, which is the largest object here and must not cross back.
+    diff_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_differential_analysis", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(input$diff_met_run_analysis, {
+      req(beta_merged(), targets_merged(), input$diff_met_id_col)
+      validate(need(file.exists(beta_rds_path()),
+                    "Beta matrix file not found on disk; please reload the data."))
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running differential methylation analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      diff_task$invoke(
+        args = list(
+          beta_path      = beta_rds_path(),
+          targets        = targets_merged(),
+          cache_dir      = DIRS$cache,
+          pathways_dir   = DIRS$pathways,
+          annotation_pkg = cfg$annotation_pkg,
+          gene_set       = cfg$gene_set,
+          palette_dir    = palette_dirs(),
+          palette_name   = input$diff_met_color_palette,
+          id_col         = input$diff_met_id_col,
+          comparison_col = input$diff_met_comparison_col,
+          baseline       = input$diff_met_baseline,
+          comparison     = input$diff_met_comparison,
+          with_champ     = isTRUE(input$diff_met_run_champ),
+          fdr_max        = DIFF_FDR_MAX,
+          out_dir        = DIRS$differential
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    observe({
+      if (identical(diff_task$status(), "running")) {
+        shinyjs::disable("diff_met_run_analysis")
+      } else {
+        shinyjs::enable("diff_met_run_analysis")
+      }
+    })
+
+    diff_met_data <- reactive({
+      status <- diff_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "Differential methylation analysis running..."))
+      tryCatch(
+        diff_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error preparing differential methylation data: ",
+                                      conditionMessage(e))))
+          NULL
+        }
+      )
+    })
     
     # Dynamic Export Buttons based on active tab
     output$diff_met_export_buttons <- renderUI({
@@ -1369,112 +1533,73 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       }
     )
     
-    # Density plot render
-    output$diff_met_density_plot <- renderPlot({
-      req(diff_met_data())
-      tryCatch({
-        plot_diff_methylation_density(
-          diff_met_data = diff_met_data(),
-          color_palette = PALETTES()$all_palettes[[input$diff_met_color_palette]],
-          DIRS$differential
-        )
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error rendering density plot: ", error_msg))
-        )
-      })
-    }, height = 650, width = 1000)
-    
+    # All of these now read from the single worker result. The FDR / logFC / row
+    # sliders are pure post-filters: the fit already ran once at DIFF_FDR_MAX, so
+    # moving a slider re-filters a table instead of re-running limma or ChAMP.
+    diff_filtered_dmps <- reactive({
+      res <- diff_met_data()
+      dmps <- res$dmps_all
+      req(is.data.frame(dmps))
+      if (nrow(dmps) == 0) return(dmps)
+
+      fdr_col <- intersect(c("adj.P.Val", "adj.P.value", "adjPVal", "FDR"), names(dmps))
+      if (length(fdr_col) > 0) {
+        dmps <- dmps[!is.na(dmps[[fdr_col[1]]]) & dmps[[fdr_col[1]]] <= input$diff_met_fdr_cut, ,
+                     drop = FALSE]
+      }
+      if ("logFC" %in% names(dmps)) {
+        dmps <- dmps[abs(dmps$logFC) > input$diff_met_lfc_cut, , drop = FALSE]
+      }
+      dmps
+    })
+
+    # Density plot render (produced by the worker; shown as the saved PNG)
+    output$diff_met_density_plot <- renderImage({
+      res <- diff_met_data()
+      validate(need(!is.null(res$density_png) && file.exists(res$density_png),
+                    "Density plot not available."))
+      list(src = res$density_png, contentType = "image/png", width = "100%")
+    }, deleteFile = FALSE)
+
     # DMP table
     output$diff_met_dmp_table <- DT::renderDataTable({
-      req(diff_met_data(), input$diff_dmps_top_cpgs, input$diff_met_fdr_cut, input$diff_met_lfc_cut)
-      tryCatch({
-        dmps <- get_dmps(diff_met_data(), 
-                         input$diff_met_fdr_cut,
-                         input$diff_met_lfc_cut,
-                         input$diff_met_run_champ,
-                         DIRS$differential)
-        if(nrow(dmps) > 0){
-          make_dt(head(dmps, input$diff_dmps_top_cpgs))
-        } else {
-          make_dt(dmps)
-        }
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMP table: ", error_msg))
-        )
-      })
+      req(input$diff_dmps_top_cpgs)
+      dmps <- diff_filtered_dmps()
+      if (nrow(dmps) > 0) {
+        make_dt(head(dmps, input$diff_dmps_top_cpgs))
+      } else {
+        make_dt(dmps)
+      }
     })
-    
+
     # DMR table
     output$diff_met_dmr_table <- DT::renderDataTable({
-      req(diff_met_data())
-      tryCatch({
-        dmrs <- get_dmrs(diff_met_data(), input$diff_met_run_champ, DIRS$differential)
-        make_dt(dmrs)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMR table: ", error_msg))
-        )
-      })
+      res <- diff_met_data()
+      validate(need(isTRUE(res$with_champ),
+                    "DMRs can only be calculated when 'Run ChAMP' is activated."))
+      make_dt(res$dmrs)
     })
-    
+
     # DMG table
     output$diff_met_dmg_table <- DT::renderDataTable({
-      req(diff_met_data())
-      tryCatch({
-        dmgs <- get_dmgs(diff_met_data(), input$diff_met_lfc_cut, DIRS$differential)
-        make_dt(dmgs)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading DMG table: ", error_msg))
-        )
-      })
+      dmgs <- diff_met_data()$dmgs
+      if (is.data.frame(dmgs) && nrow(dmgs) > 0 && "logFC" %in% names(dmgs)) {
+        dmgs <- dmgs[abs(dmgs$logFC) > input$diff_met_lfc_cut, , drop = FALSE]
+      }
+      make_dt(dmgs)
     })
-    
-    
+
     # FGSEA tables
     output$diff_met_fgsea_gobp_table <- DT::renderDataTable({
-      req(diff_met_data(),APP_CACHE())
-      tryCatch({
-        fgsea_gobp <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "gobp", DIRS$differential)
-        make_dt(fgsea_gobp)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA GOBP results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$gobp)
     })
-    
+
     output$diff_met_fgsea_kegg_table <- DT::renderDataTable({
-      req(diff_met_data(), APP_CACHE())
-      tryCatch({
-        fgsea_kegg <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "kegg", DIRS$differential)
-        make_dt(fgsea_kegg)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA KEGG results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$kegg)
     })
-    
+
     output$diff_met_fgsea_hallmark_table <- DT::renderDataTable({
-      req(diff_met_data(), APP_CACHE())
-      tryCatch({
-        fgsea_hallmark <- get_fgsea(diff_met_data(), APP_CACHE()$pathways, "hallmark", DIRS$differential)
-        make_dt(fgsea_hallmark)
-      }, error = function(e) {
-        error_msg <- e$message
-        shiny::validate(
-          shiny::need(FALSE, paste0("Error loading FGSEA HALLMARK results: ", error_msg))
-        )
-      })
+      make_dt(diff_met_data()$fgsea$hallmark)
     })
     
     
@@ -1499,56 +1624,12 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
     })    
     
     # --- CNV LOGIC ---
-    # Dynamic Export Buttons based on active tab
-    output$cnv_export_buttons <- renderUI({
-      req(input$cnv_tabset)
-      
-      active_tab <- input$cnv_tabset
-      
-      switch(active_tab,
-             "pileup" = div(
-               p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
-                 icon("download", style = "font-size: 0.75rem;"), " Export Pile-up Plot"),
-               div(
-                 class = "d-flex gap-2",
-                 downloadButton(ns("cnv_download_pileup_png"), " PNG",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
-                 downloadButton(ns("cnv_download_pileup_pdf"), " PDF",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1")
-               )
-             ),
-             
-             "persample" = div(
-               p(class = "text-uppercase fw-bold mb-2", style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #fd7e14;",
-                 icon("download", style = "font-size: 0.75rem;"), " Export Sample Plot"),
-               div(
-                 class = "d-flex gap-2",
-                 downloadButton(ns("cnv_download_sample_png"), " PNG",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
-                 downloadButton(ns("cnv_download_sample_pdf"), " PDF",
-                                class = "btn btn-sm btn-outline-secondary flex-grow-1")
-               )
-             ),
-             
-             # Default fallback
-             div(
-               p(class = "text-muted mb-2", style = "font-size: 0.75rem;",
-                 "Select a tab to see export options")
-             )
-      )
-    })
-    
-    # Reactive to store final BED file path
-    cnv_bed_path <- reactiveVal(NULL)
-    
-    # Reactive to trigger analysis
+    # Bumped by the Run button once its inputs validate; the worker task below
+    # keys off it. This was previously used without ever being declared, which
+    # stayed hidden only because the old eventReactive consuming it was lazy.
     run_analysis_trigger <- reactiveVal(0)
-    
-    # Store paths to saved plots
-    cached_pileup_png <- reactiveVal(NULL)
-    cached_sample_png <- reactiveVal(NULL)
-    
-    # Observer for BED file upload
+
+    # Dynamic Export Buttons based on active tab
     observeEvent(input$cnv_bed_file, {
       req(input$cnv_bed_file)
       
@@ -1605,34 +1686,86 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       run_analysis_trigger(run_analysis_trigger() + 1)
     })
     
-    # Prepare data (only runs when trigger changes)
-    cnv_data <- eventReactive(run_analysis_trigger(), {
+    # Prepare data in a worker process.
+    #
+    # ExtendedTask must not read reactives, so every parameter is snapshotted at
+    # invoke() time below and passed by value. Only paths and scalars cross into
+    # the worker; it reads the MethylSet from disk itself.
+    cnv_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("prepare_cnv_data", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    output$download_log <- m4a_log_download_handler(DIRS$analysis, DIRS$analysis_id)
+
+    app_dir <- normalizePath(getwd())
+
+    # One progress panel, driven by whichever task is running. Registered per
+    # task because each has its own status; only the running one renders.
+    for (tsk in c("mds_task", "pca_task", "umap_task", "predict_task",
+                  "heatmap_task", "global_task", "diff_task", "cnv_task")) {
+      local({
+        nm <- tsk
+        observe({
+          t <- get0(nm, inherits = TRUE)
+          req(!is.null(t), identical(t$status(), "running"))
+          m4a_render_progress(output, session, t, DIRS$analysis)
+        })
+      })
+    }
+
+    observeEvent(run_analysis_trigger(), {
+      req(run_analysis_trigger() > 0)
       req(input$cnv_array_select,
           input$cnv_comparison_col, cnv_bed_path(),
           input$cnv_baseline, input$cnv_comparison)
-      
-      if(is.null(array_names())){
-        shiny::need(FALSE, "CNVs can not be calculated from BetaMatrix only, 
-                    require IDATs")
-      } else {
-        tryCatch({
-          showNotification("Running CNV analysis...", type = "message", duration = 3)
-          result <- prepare_cnv_data(mSetSq_list(),
-                                     input$cnv_array_select, 
-                                     cnv_bed_path(),
-                                     input$cnv_include_xy,
-                                     input$cnv_comparison_col,
-                                     input$cnv_baseline,
-                                     input$cnv_comparison)
-          result
-        }, error = function(e) {
-          error_msg <- e$message
-          shiny::validate(
-            shiny::need(FALSE, paste0("Error preparing CNV data: ", error_msg))
-          )
-          NULL
-        })
+
+      if (is.null(array_names())) {
+        showNotification("CNVs cannot be calculated from a beta matrix only; IDATs are required.",
+                         type = "error", duration = 5)
+        return()
       }
+
+      queued <- m4a_queue_message()
+      showNotification(
+        if (is.null(queued)) "Running CNV analysis..." else queued,
+        type = "message", duration = 5
+      )
+
+      cnv_task$invoke(
+        args = list(
+          mset_list      = mSetSq_list(),
+          array_type     = input$cnv_array_select,
+          bed_path       = cnv_bed_path(),
+          chrXY          = input$cnv_include_xy,
+          comparison_col = input$cnv_comparison_col,
+          baseline       = input$cnv_baseline,
+          comparison     = input$cnv_comparison,
+          cache_dir      = DIRS$cache
+        ),
+        app_dir = app_dir
+      )
+    })
+
+    # Keep the Run button honest about what the server is doing.
+    observe({
+      if (identical(cnv_task$status(), "running")) {
+        shinyjs::disable("cnv_run_analysis")
+      } else {
+        shinyjs::enable("cnv_run_analysis")
+      }
+    })
+
+    cnv_data <- reactive({
+      status <- cnv_task$status()
+      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
+      validate(need(status != "running", "CNV analysis running..."))
+      tryCatch(
+        cnv_task$result(),
+        error = function(e) {
+          validate(need(FALSE, paste0("Error preparing CNV data: ", conditionMessage(e))))
+          NULL
+        }
+      )
     })
     
     # Generate pile-up plot when data is ready
@@ -1662,8 +1795,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       list(
         src = cached_pileup_png(),
         contentType = "image/png",
-        width = 1000,
-        height = 650
+        width = "100%"
       )
     }, deleteFile = FALSE)
     
@@ -1673,11 +1805,11 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       
       selected_array <- input$cnv_array_select
       mset_path <- mSetSq_list()[[selected_array]]
-      mset_obj <- readRDS(mset_path)
-      
-      if (!is.null(mset_obj)) {
-        meta_cols <- colnames(pData(mset_obj))
-        
+      req(!is.null(mset_path))
+
+      pd <- read_mset_pdata(mset_path)
+      if (!is.null(pd)) {
+        meta_cols <- colnames(pd)
         updateSelectInput(session, "cnv_comparison_col", choices = meta_cols,
                           selected = meta_cols[1])
       }
@@ -1689,10 +1821,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       
       selected_array <- input$cnv_array_select
       mset_path <- mSetSq_list()[[selected_array]]
-      mset_obj <- readRDS(mset_path)
-      
-      if (!is.null(mset_obj)) {
-        pd <- pData(mset_obj)
+      req(!is.null(mset_path))
+
+      pd <- read_mset_pdata(mset_path)
+      if (!is.null(pd)) {
         raw_vals <- na.omit(as.character(pd[[input$cnv_comparison_col]]))
         
         validate(
@@ -1767,8 +1899,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE) {
       list(
         src = cached_sample_png(),
         contentType = "image/png",
-        width = 1000,
-        height = 650
+        width = "100%"
       )
     }, deleteFile = FALSE)
     

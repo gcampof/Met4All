@@ -1,11 +1,10 @@
 # Module UI function
 mds_ui <- function(ns) {
   div(
-    class = "d-flex gap-3 mt-3",
-    style = "align-items: flex-start;",
+    class = "analysis-row",
     
     div(
-      style = "display: flex; flex-direction: column; gap: 12px; width: var(--param-panel-width); min-width: var(--param-panel-width);",
+      class = "analysis-side",
       
       # ---- TOP ACTION BAR  ----
       div(
@@ -68,8 +67,7 @@ mds_ui <- function(ns) {
     
     # RIGHT: Plot
     div(
-      class = "flex-grow-1",
-      style = "min-width: 0;",
+      class = "analysis-main",
       div(
         class = "card p-3 plot-card",
         style = "height: 100%;",

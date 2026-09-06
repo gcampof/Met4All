@@ -1,37 +1,32 @@
+# Raises plain errors rather than shiny::validate(): this runs inside analysis
+# workers, where there is no session. Callers in the main process already wrap it
+# in tryCatch and turn the message into a validate(), so the text still reaches
+# the user unchanged.
 align_targets_to_beta_cols <- function(beta, targets, id_col) {
-  # Check id_col actually exists in targets
-  shiny::validate(
-    shiny::need(id_col %in% colnames(targets), paste0(
-      "Column '", id_col, "' not found in sample sheet. ",
-      "Available columns: ", paste(colnames(targets), collapse = ", ")
-    ))
-  )
-  
-  # Clean beta col names
-  colnames(beta) <- trimws(colnames(beta))
-  colnames(beta) <- gsub("^X", "", colnames(beta))
-  colnames(beta) <- gsub("[.]", "-", colnames(beta))
-  
-  # Clean target IDs
-  targets[[id_col]] <- trimws(as.character(targets[[id_col]]))
-  
-  # Match
-  common_ids <- intersect(colnames(beta), targets[[id_col]])
-  if (length(common_ids) < 2) {
-    shiny::validate(
-      shiny::need(FALSE, paste0(
-        "Could not match SampleSheet to BetaMatrix using column '", id_col, "' — ",
-        "only ", length(common_ids), " common ID(s) found. ",
-        "Please try a different Sample ID column."
-      ))
-    )
+  if (!id_col %in% colnames(targets)) {
+    stop("Column '", id_col, "' not found in sample sheet. Available columns: ",
+         paste(colnames(targets), collapse = ", "))
   }
-  
-  beta2 <- beta[, common_ids, drop = FALSE]
+
+  # Clean the column names into a separate vector rather than assigning back into
+  # `beta`: the caller still holds a reference to the matrix, so `colnames<-`
+  # would duplicate the whole thing (~450 MB for 800k x 70) before we subset it.
+  beta_cols <- gsub("[.]", "-", gsub("^X", "", trimws(colnames(beta))))
+
+  targets[[id_col]] <- trimws(as.character(targets[[id_col]]))
+
+  common_ids <- intersect(beta_cols, targets[[id_col]])
+  if (length(common_ids) < 2) {
+    stop("Could not match SampleSheet to BetaMatrix using column '", id_col, "' - only ",
+         length(common_ids), " common ID(s) found. Please try a different Sample ID column.")
+  }
+
+  beta2 <- beta[, match(common_ids, beta_cols), drop = FALSE]
+  colnames(beta2) <- common_ids
+
   targets2 <- targets[match(common_ids, targets[[id_col]]), , drop = FALSE]
   rownames(targets2) <- targets2[[id_col]]
-  rownames(beta2) <- rownames(beta)
-  
+
   list(beta2 = beta2, targets2 = targets2)
 }
 
@@ -52,7 +47,9 @@ get_matching_colors <- function(color_vals, color_palette){
   base_colors <- color_palette(n_needed)
   if (length(base_colors) < n_needed) 
     base_colors <- rep_len(base_colors, n_needed)
-  matched_colors <- setNames(base_colors, color_vals)
+  # Palettes can return more colours than asked for (brewer.pal has a minimum of
+  # 3), which would leave NA-named entries.
+  matched_colors <- setNames(base_colors[seq_len(n_needed)], color_vals)
   
   return(matched_colors)
 }

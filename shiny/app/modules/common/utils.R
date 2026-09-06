@@ -16,18 +16,53 @@ setup_common_dirs <- function(cfg) {
   return(common_dirs)
 }
 
-# Set up analysis directory (creates new one with auto-generated ID from session)
-setup_analysis_dir <- function(common_dirs, cfg, session) {
-  analysis_id <- paste0(
-    format(Sys.time(), "%Y%m%d_%H%M%S"),
-    "_",
-    substr(session$token, 1, 8) 
-  )
-  
+# An analysis id is safe to take from a URL only if it matches exactly this
+# shape. The id becomes a path segment, so anything looser risks traversal.
+# The trailing 32 hex characters are the full Shiny session token: it is what
+# makes the id unguessable, which matters because the id is effectively the
+# bearer token for resuming an analysis.
+M4A_ANALYSIS_ID_RE <- "^[0-9]{8}_[0-9]{6}_[0-9a-f]{32}$"
+
+valid_analysis_id <- function(id) {
+  is.character(id) && length(id) == 1L && !is.na(id) && grepl(M4A_ANALYSIS_ID_RE, id)
+}
+
+# Set up analysis directory.
+#
+# With `resume_id` naming an existing analysis, that directory is reused instead
+# of a new one being created, which is what lets a user come back to work they
+# left. Falls back to a fresh analysis whenever the id is absent, malformed or
+# no longer on disk.
+setup_analysis_dir <- function(common_dirs, cfg, session, resume_id = NULL) {
+  resumed <- FALSE
+
+  if (valid_analysis_id(resume_id)) {
+    candidate <- file.path(common_dirs$data, paste0("analysis_", resume_id))
+    if (dir.exists(candidate)) {
+      analysis_id <- resume_id
+      resumed <- TRUE
+      message("Resuming analysis: ", analysis_id)
+    }
+  }
+
+  if (!resumed) {
+    analysis_id <- paste0(format(Sys.time(), "%Y%m%d_%H%M%S"), "_", session$token)
+  }
+
   analysis_dir <- file.path(common_dirs$data, paste0("analysis_", analysis_id))
-  
+
   dir.create(analysis_dir, showWarnings = FALSE, recursive = TRUE)
-  
+
+  # showWarnings = FALSE hides a permission failure, and everything downstream
+  # then breaks somewhere far less obvious (an unwritable data directory used to
+  # surface as addResourcePath killing the session at start-up). Fail here
+  # instead, and say how to fix it.
+  if (!dir.exists(analysis_dir)) {
+    stop("Cannot create the analysis directory at '", analysis_dir, "'. ",
+         "The data directory is not writable by the app. On the host, run:\n",
+         "  chmod 777 ./shiny/logs ./shiny/app/data")
+  }
+
   subdirs <- list()
   for (name in names(cfg$subdirs)) {
     sub_path <- file.path(analysis_dir, cfg$subdirs[[name]])
@@ -37,71 +72,85 @@ setup_analysis_dir <- function(common_dirs, cfg, session) {
   
   message("Analysis directory created: ", analysis_dir)
   
-  c(common_dirs, list(analysis = analysis_dir, analysis_id = analysis_id), subdirs)
+  c(common_dirs,
+    list(analysis = analysis_dir, analysis_id = analysis_id, resumed = resumed),
+    subdirs)
 }
 
 
-# Analysis dirs belonging to sessions that are still connected in THIS process.
-# Registered dirs are never swept, however old they look.
-if (!exists(".M4A_LIVE_DIRS", envir = globalenv(), inherits = FALSE)) {
-  assign(".M4A_LIVE_DIRS", new.env(parent = emptyenv()), envir = globalenv())
-}
-
-.M4A_HEARTBEAT <- ".m4a_active"
-
-# Register an analysis dir as live and keep it swept-safe for as long as the
-# session lasts. The heartbeat file is what protects it from OTHER replicas
-# sharing the same data volume, which cannot see this process's registry.
-register_analysis_dir <- function(analysis_dir, session) {
-  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
-  assign(analysis_dir, TRUE, envir = live)
-  touch_analysis_dir(analysis_dir)
-
-  session$onSessionEnded(function() {
-    suppressWarnings(rm(list = analysis_dir, envir = live))
-    unlink(file.path(analysis_dir, .M4A_HEARTBEAT), force = TRUE)
-  })
-
-  invisible(analysis_dir)
-}
-
-touch_analysis_dir <- function(analysis_dir) {
-  hb <- file.path(analysis_dir, .M4A_HEARTBEAT)
-  # Writing the file (not just creating it) is what advances the parent dir's
-  # mtime, which is the signal cleanup_old_analysis_dirs reads.
-  try(writeLines(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), hb), silent = TRUE)
-  invisible(hb)
-}
-
-# Reclaim abandoned analysis dirs.
+# What the main process keeps in place of the beta matrix itself.
 #
-# The age test deliberately uses the heartbeat file, not the directory's own
-# mtime: a directory's mtime only advances when an entry is added or removed
-# directly inside it, and every analysis writes into results/ subdirs instead.
-# The old mtime check therefore froze at creation time, so a session still
-# running after max_age_hours had its entire tree deleted by the next visitor.
-cleanup_old_analysis_dirs <- function(base_dir, max_age_hours = 24) {
-  if (!dir.exists(base_dir)) return(invisible(NULL))
-
-  live <- get(".M4A_LIVE_DIRS", envir = globalenv())
-  dirs <- list.dirs(base_dir, recursive = FALSE, full.names = TRUE)
-  now  <- Sys.time()
-
-  for (d in dirs) {
-    # Live in this process.
-    if (!is.null(get0(d, envir = live, inherits = FALSE))) next
-
-    hb <- file.path(d, .M4A_HEARTBEAT)
-    last_seen <- if (file.exists(hb)) file.info(hb)$mtime else file.info(d)$mtime
-    if (is.na(last_seen)) next
-
-    if (difftime(now, last_seen, units = "hours") > max_age_hours) {
-      unlink(d, recursive = TRUE, force = TRUE)
-      message("[CLEANUP] Removed old analysis dir: ", d)
-    }
+# The matrix is ~450 MB for a 70-sample EPIC run and used to be held in a
+# per-session reactiveVal, so N connected users cost N x 450 MB before any
+# analysis started. Every analysis now reads it from disk inside a worker, so
+# the main process only needs to know that it exists and what is in it.
+beta_descriptor <- function(path, beta = NULL) {
+  if (is.null(beta) && file.exists(path)) {
+    beta <- tryCatch(readRDS(path), error = function(e) NULL)
   }
+  list(
+    path     = path,
+    samples  = if (!is.null(beta)) colnames(beta) else character(0),
+    n_probes = if (!is.null(beta)) nrow(beta) else NA_integer_
+  )
+}
 
-  invisible(NULL)
+
+# --- Resuming an analysis ----------------------------------------------------
+# A small manifest records where the finished artifacts live, so a later visit
+# can rehydrate the session from disk instead of starting over. Only paths and
+# small values go in it; the heavy objects stay where they already are.
+
+manifest_path <- function(analysis_dir) file.path(analysis_dir, "manifest.rds")
+
+write_analysis_manifest <- function(analysis_dir, type, array_names, mset_paths,
+                                    beta_path, targets_path) {
+  manifest <- list(
+    version      = 1L,
+    saved_at     = Sys.time(),
+    type         = type,
+    array_names  = array_names,
+    mset_paths   = mset_paths,
+    beta_path    = beta_path,
+    targets_path = targets_path
+  )
+  tryCatch(
+    saveRDS(manifest, manifest_path(analysis_dir)),
+    error = function(e) warning("Could not write analysis manifest: ", e$message)
+  )
+  invisible(manifest)
+}
+
+# Persist the samplesheet and mark the analysis resumable. Called once an
+# analysis has a usable beta matrix; the matrix itself is already on disk.
+snapshot_analysis <- function(DIRS, type, array_names, mset_paths, targets) {
+  merged_dir <- file.path(DIRS$beta, "merged")
+  dir.create(merged_dir, showWarnings = FALSE, recursive = TRUE)
+
+  beta_path    <- file.path(merged_dir, "beta_merged.rds")
+  targets_path <- file.path(merged_dir, "targets_merged.rds")
+
+  tryCatch(saveRDS(targets, targets_path),
+           error = function(e) warning("Could not save samplesheet: ", e$message))
+
+  write_analysis_manifest(DIRS$analysis, type, array_names, mset_paths,
+                          beta_path, targets_path)
+}
+
+
+# Returns NULL unless the manifest exists and the files it points at are still
+# there, so a half-finished or partly deleted analysis simply starts fresh.
+read_analysis_manifest <- function(analysis_dir) {
+  path <- manifest_path(analysis_dir)
+  if (!file.exists(path)) return(NULL)
+
+  manifest <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (is.null(manifest) || !identical(manifest$version, 1L)) return(NULL)
+
+  needed <- c(manifest$beta_path, manifest$targets_path)
+  if (length(needed) == 0 || !all(file.exists(needed))) return(NULL)
+
+  manifest
 }
 
 
@@ -229,8 +278,13 @@ get_built_in_color_palettes <- function(){
 
 
 # Load custom palettes from directory
-load_custom_palettes <- function(dir) {
-  txt_files <- list.files(dir, pattern = "\\.txt$", full.names = TRUE)
+# `dirs` may name several directories: the shared one shipped with the image and,
+# when a user uploads one, their own session directory. Uploads are kept per
+# session so one user's palette does not appear in everyone else's dropdowns.
+load_custom_palettes <- function(dirs) {
+  dirs <- dirs[dir.exists(dirs)]
+  if (length(dirs) == 0) return(list())
+  txt_files <- unlist(lapply(dirs, list.files, pattern = "\\.txt$", full.names = TRUE))
   
   if (length(txt_files) == 0) return(list())
   
@@ -255,9 +309,9 @@ load_custom_palettes <- function(dir) {
 
 
 # Prepare all color palettes
-prepare_color_palettes <- function(dir) {
+prepare_color_palettes <- function(dirs) {
   builtin_palettes <- get_built_in_color_palettes()
-  custom_palettes <- load_custom_palettes(dir)
+  custom_palettes <- load_custom_palettes(dirs)
   
   all_palettes <- c(builtin_palettes, custom_palettes)
   
@@ -326,39 +380,6 @@ load_new_palette <- function(file_path, palette_name, palette_dir) {
   })
 }
 
-start_logging <- function(out_dir) {
-  tryCatch({
-    log_file_path <- file.path(out_dir, "logs.txt")
-    log_conn <- file(log_file_path, open = "wt")
-    if (sink.number(type = "output") > 0) sink(type = "output")
-    if (sink.number(type = "message") > 0) sink(type = "message")
-    sink(log_conn, type = "output", split = TRUE)
-    sink(log_conn, type = "message")
-    assign(".log_conn", log_conn, envir = .GlobalEnv)
-    options(crayon.enabled = FALSE)
-    options(cli.num_colors = 1)
-    cat("\n=== LOG STARTED", format(Sys.time()), "===\n\n")
-  }, error = function(e) {
-    warning("[Logging] Failed to start logging: ", e$message)
-  })
-}
-
-
-stop_logging <- function() {
-  cat("\n=== LOG STOPPED", format(Sys.time()), "===\n")
-  
-  # Close sinks in reverse order
-  if (sink.number(type = "message") > 0) sink(type = "message")
-  if (sink.number(type = "output") > 0) sink(type = "output")
-  
-  # Close and remove the connection
-  if (exists(".log_conn")) {
-    close(.log_conn)
-    rm(.log_conn, envir = .GlobalEnv)
-  }
-}
-
-
 load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
   showModal(modalDialog(
     title = div(
@@ -372,7 +393,7 @@ load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
           role = "status",
           style = "width: 3rem; height: 3rem;"),
       p("This may take a moment...", class = "text-muted"),
-      p("Loading packages and cache...", class = "small text-muted")
+      p("Preparing the analysis workers...", class = "small text-muted")
     ),
     footer = NULL,
     easyClose = FALSE,
@@ -381,9 +402,18 @@ load_heavy_components <- function(session, DIRS, cfg, APP_CACHE) {
   
   session$onFlushed(function() {
     tryCatch({
-      source("modules/common/all_imports.R", local = TRUE)
-      cache <- setup_cache(DIRS, cfg)
-      APP_CACHE(cache)
+      # Deliberately NOT sourcing all_imports.R or building the annotation cache
+      # here any more. Both used to run in the shared app process, which froze
+      # every other connected session for ~26 s the first time anyone loaded
+      # data. Neither is needed here:
+      #   * every analysis now runs in a worker, which loads its own stack;
+      #   * the main process only calls Bioconductor through pkg:: , which
+      #     resolves the namespace on demand without attaching all 17 packages;
+      #   * APP_CACHE is no longer read anywhere in the main process.
+      # The workers are started in the background instead, so the cost is paid
+      # off the critical path and blocks nobody.
+      m4a_warm_workers(getwd())
+
       removeModal()
     }, error = function(e) {
       removeModal()

@@ -134,6 +134,7 @@ docker logs m4a-shiny
 .
 ├── docker-compose.dev.yml
 ├── docker-compose.prod.yml
+├── docker-compose.scale.yml
 ├── rstudio/
 │   └── Dockerfile
 └── shiny/
@@ -202,6 +203,44 @@ docker compose -f docker-compose.dev.yml up -d --build shiny
 # RStudio only
 docker compose -f docker-compose.dev.yml up -d --build rstudio
 ```
+
+### Running for Multiple Users
+
+Met4All is designed to be shared. Several people can use the same instance at
+the same time: the long steps (IDAT import and QC, beta-matrix generation,
+differential methylation, CNV, consensus clustering) run in separate worker
+processes, so one person's analysis does not freeze anyone else's session. While
+an analysis runs you see a progress bar with the current step, and if more
+analyses are requested than there are workers, the extra ones queue and start
+automatically.
+
+You can tune this with environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `M4A_MAX_JOBS` | 2 | How many analyses run at the same time. Extra ones queue, and the user is told their position. |
+| `M4A_THREADS_PER_JOB` | 2 | Threads used inside each analysis. Keep `MAX_JOBS x THREADS_PER_JOB` within the number of cores on the machine. |
+| `M4A_MIN_FREE_GB` | 15 | Refuse to start an analysis if there is less free disk space than this. |
+
+Each running analysis needs its own memory, so raising `M4A_MAX_JOBS` needs a
+machine with proportionally more RAM than the requirements above.
+
+Analyses keep running if you close the tab. The address in your browser bar
+identifies your analysis, so you can come back to it later and pick up where you
+left off.
+
+#### Serving more people at once
+
+If a single machine is not enough, `docker-compose.scale.yml` runs several
+instances behind a reverse proxy, with no changes to the app or the image:
+
+```bash
+docker compose -f docker-compose.scale.yml up -d --scale shiny=4
+```
+
+The app is served on the same **http://localhost:3838** (set `M4A_PORT` to
+change it). Users are kept on the instance that served them, which the proxy
+handles automatically — no extra configuration needed.
 
 ### Publishing a New Image to DockerHub
 

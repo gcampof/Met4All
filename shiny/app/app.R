@@ -8,9 +8,6 @@ library(shiny)
 library(shinyjs)
 library(bslib)
 library(dplyr)
-library(HDF5Array)
-library(DelayedArray)
-library(DelayedMatrixStats)
 library(archive)
 library(readxl)
 library(readr)
@@ -26,7 +23,6 @@ library(RColorBrewer)
 library(viridis)
 library(colorspace)
 library(svglite)
-library(qs2)
 library(data.table)
 library(tools)
 library(matrixStats)
@@ -41,8 +37,12 @@ options(shiny.maxRequestSize = 10 * 1024^3)
 # Stop data.table/BLAS/BiocParallel from each sizing themselves to the whole host.
 m4a_apply_thread_caps()
 
+# The worker pool starts lazily on the first heavy analysis; make sure it does
+# not outlive the app.
+onStop(function() m4a_stop_workers())
+
 # JavaScript reset code
-jsResetCode <- "shinyjs.resetPage = function() {history.go(0)}"
+jsResetCode <- "shinyjs.resetPage = function() {window.location.href = window.location.pathname;}"
 
 # UI
 ui <- fluidPage(
@@ -57,8 +57,42 @@ ui <- fluidPage(
   
   tags$head(
     tags$style(HTML("
+      /* App shell: the viewport is the frame. The navbar keeps its natural
+         height and the content area takes the rest, so the page itself never
+         scrolls — only the panels that are meant to. */
+      html, body { height: 100%; }
+      body { margin: 0; overflow: hidden; }
+
+      body > .container-fluid {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 0;
+      }
+
+      .content-container {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+
+      /* Loading view is a long form and scrolls as a whole; the analysis view
+         manages its own internal scrolling. */
+      #view_load { height: 100%; overflow-y: auto; }
+      #view_primary { height: 100%; min-height: 0; }
+
+      /* Below the width this layout is designed for there is no sensible way to
+         fit a 250px nav plus a 280px control column plus a plot, so fall back to
+         ordinary page scrolling rather than clipping content. */
+      @media (max-width: 900px), (max-height: 520px) {
+        body { overflow: auto; }
+        body > .container-fluid { height: auto; overflow: visible; }
+        #view_load, #view_primary { height: auto; }
+      }
+
       /* Custom navbar styling */
       .custom-navbar {
+        flex: 0 0 auto;
         background-color: #ffffff;
         box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         border-bottom: 1px solid #e9ecef;
@@ -156,21 +190,17 @@ server <- function(input, output, session) {
   # Initial setup
   cfg  <- config::get()
   DIRS <- setup_common_dirs(cfg)
-  DIRS <- setup_analysis_dir(DIRS, cfg, session)
 
-  # Protect this session's results from the startup sweep below, and release
-  # them when the session ends.
-  register_analysis_dir(DIRS$analysis, session)
+  # ?analysis=<id> in the URL identifies work to resume. The id is validated
+  # against a strict pattern before it is ever used as a path.
+  resume_id <- isolate(parseQueryString(session$clientData$url_search)$analysis)
+  DIRS <- setup_analysis_dir(DIRS, cfg, session, resume_id = resume_id)
+
+  # Publish the id so the browser URL is the bookmark. Nothing else is needed to
+  # come back to this analysis later.
+  updateQueryString(paste0("?analysis=", DIRS$analysis_id), mode = "replace")
 
   APP_CACHE <- reactiveVal(NULL)
-  
-  # Flags
-  primary_ui_initialized <- reactiveVal(FALSE)
-  primary_server_initialized <- reactiveVal(FALSE)
-  heavy_components_loaded <- reactiveVal(FALSE)
-  
-  # Cleanup on start
-  cleanup_old_analysis_dirs(DIRS$data, max_age_hours = 24)
   
   # Display session ID in navbar
   output$session_id_display <- renderUI({
@@ -189,9 +219,54 @@ server <- function(input, output, session) {
   
   # Initialize data loading
   load_data_return <- load_data_server("load_data", DIRS, cfg)
+
+  # Resume: rehydrate from disk rather than making the user start over. Only a
+  # finished analysis has a manifest, so anything half-done starts fresh.
+  if (isTRUE(DIRS$resumed)) {
+    manifest <- read_analysis_manifest(DIRS$analysis)
+
+    if (is.null(manifest)) {
+      # No manifest at all just means the user came back before finishing the
+      # upload; that is ordinary and needs no alarm. Warn only when a manifest
+      # exists but its artifacts have gone.
+      if (file.exists(manifest_path(DIRS$analysis))) {
+        showNotification(
+          "That analysis could not be restored - its files are no longer available.",
+          type = "warning", duration = 8
+        )
+      }
+    } else {
+      tryCatch({
+        load_data_return$type_selected(manifest$type)
+        load_data_return$array_names_ld(manifest$array_names)
+        load_data_return$mSetSq_list_ld(manifest$mset_paths)
+        load_data_return$targets_merged_ld(readRDS(manifest$targets_path))
+        # Set last: the view switch below keys off it. Only a descriptor is
+        # stored; the matrix stays on disk for the workers.
+        load_data_return$beta_merged_ld(beta_descriptor(manifest$beta_path))
+
+        showNotification("Welcome back - your previous analysis has been restored.",
+                         type = "message", duration = 6)
+      }, error = function(e) {
+        showNotification(paste("Could not restore the previous analysis:", conditionMessage(e)),
+                         type = "error", duration = 10)
+      })
+    }
+  }
+
+  # Keep the samplesheet on disk current. It is edited in-session (cell edits,
+  # consensus clusters written back), so without this a resumed analysis would
+  # silently lose those changes.
+  observeEvent(load_data_return$targets_merged_ld(), {
+    req(load_data_return$targets_merged_ld())
+    path <- file.path(DIRS$beta, "merged", "targets_merged.rds")
+    if (dir.exists(dirname(path))) {
+      try(saveRDS(load_data_return$targets_merged_ld(), path), silent = TRUE)
+    }
+  }, ignoreInit = TRUE)
   
   # Server also initialized at start
-  primary_analysis_server("primary_analysis", load_data_return, DIRS, APP_CACHE)
+  primary_analysis_server("primary_analysis", load_data_return, DIRS, APP_CACHE, cfg)
   
   # Simple view switching — just show/hide
   observeEvent(load_data_return$beta_merged_ld(), {

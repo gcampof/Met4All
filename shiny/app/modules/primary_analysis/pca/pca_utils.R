@@ -1,5 +1,7 @@
 # Prepare PCA data from beta matrix
-prepare_pca_data <- function(beta, targets, id_col, top_cpgs) {
+# Runs in a worker; see prepare_mds_data for why beta arrives as a path.
+prepare_pca_data <- function(beta_path, targets, id_col, top_cpgs) {
+  beta <- readRDS(beta_path)
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
   beta2    <- align_res$beta2
   targets2 <- align_res$targets2

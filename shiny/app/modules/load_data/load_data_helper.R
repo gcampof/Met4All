@@ -51,6 +51,21 @@ col_vector<-c(
 )
 
 
+# Path of the small pData sidecar written next to a saved MethylSet.
+mset_pdata_path <- function(mset_path) {
+  sub("\\.rds$", "_pData.rds", mset_path)
+}
+
+
+# Sample metadata for a saved MethylSet. Falls back to reading the full object
+# when the sidecar is missing, so analyses created before it existed still work.
+read_mset_pdata <- function(mset_path) {
+  side <- mset_pdata_path(mset_path)
+  if (file.exists(side)) return(readRDS(side))
+  as.data.frame(minfi::pData(readRDS(mset_path)))
+}
+
+
 # Creates the new directory and returns the path
 create_dir <- function(path) {
   if (!dir.exists(path)) {
@@ -549,20 +564,20 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
     array_prep_dir <- file.path(preprocessing_dir, array)
     if (!dir.exists(array_prep_dir) ||
         length(list.files(array_prep_dir, pattern = "\\.idat$", recursive = TRUE)) == 0) {
-      notification_id <- showNotification(paste0("Skipping empty or missing array directory: ", 
-                                                 array), type="message", duration=2)
+      message("[qc] ", paste0("Skipping empty or missing array directory: ", 
+                                                 array))
       message("Skipping empty or missing array directory: ", array)
       next
     }
     create_dir(file.path(qc_dir, array))
     arrays_used <- c(arrays_used, array)
     
-    notification_id <- showNotification(paste0("Found array: ", array), type="message", duration=2)
+    message("[qc] ", paste0("Found array: ", array))
     message("Found array: ", array)
   }
   
   if (length(arrays_used) == 0) {
-    notification_id <- showNotification("No arrays found to process", type="error", duration=0)
+    message("[qc] ", "No arrays found to process")
     stop("No arrays found to process")
   }
   
@@ -575,7 +590,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
   # Process arrays ONE AT A TIME
   for (array in arrays_used) {
     message(paste0("\n=== Processing ", array, " ==="))
-    notification_id <- showNotification(paste0("Processing: ", array), type="message", duration=0)
+    message("[qc] ", paste0("Processing: ", array))
     
     array_prep_dir <- file.path(preprocessing_dir, array)
     array_qc_dir <- file.path(qc_dir, array)
@@ -584,8 +599,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
     targets <- minfi::read.metharray.sheet(array_prep_dir, pattern = "SampleSheet.csv")
     n_samples <- nrow(targets)
     
-    removeNotification(notification_id)
-    notification_id <- showNotification(paste0("Loaded targets for ", n_samples, " samples"), type="message", duration=0)
+    message("[qc] ", paste0("Loaded targets for ", n_samples, " samples"))
     message("Loaded targets for ", n_samples, " samples")
     
     if (array == "450K") {
@@ -598,16 +612,12 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
     
     # Determine if we need batch processing
     if (n_samples > batch_size & array != "EPIC_V2") {
-      removeNotification(notification_id)
-      notification_id <- showNotification(paste0("Large dataset detected (", n_samples, " samples). Using batch processing"), 
-                       type = "message", duration =0)
+      message("[qc] ", paste0("Large dataset detected (", n_samples, " samples). Using batch processing"))
       message("Large dataset detected (", n_samples, " samples). Using batch processing with batch size ", batch_size)
       
       # Calculate number of batches
       n_batches <- ceiling(n_samples / batch_size)
-      removeNotification(notification_id)
-      notification_id <- showNotification(paste0("Processing batch ", batch_idx, "/", n_batches), 
-                                          type = "message", duration = 0)
+      message("[qc] ", paste0("Processing batch ", batch_idx, "/", n_batches))
       message("Processing in ", n_batches, " batches")
       
       # Create directory for batch files
@@ -619,9 +629,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
         start_idx <- (batch_idx - 1) * batch_size + 1
         end_idx <- min(batch_idx * batch_size, n_samples)
         
-        removeNotification(notification_id)
-        notification_id <- showNotification(paste0("Processing batch ", batch_idx, "/", n_batches), 
-                                            type = "message", duration = 0)
+        message("[qc] ", paste0("Processing batch ", batch_idx, "/", n_batches))
         message("Processing batch ", batch_idx, "/", n_batches, " (samples ", start_idx, "-", end_idx, ")")
         
         # Load batch targets
@@ -667,9 +675,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       if (length(batch_paths) > 1) {
         for (i in 2:length(batch_paths)) {
           
-          removeNotification(notification_id)
-          notification_id <- showNotification(paste0("Merging ", length(batch_paths), " batches..."), 
-                                              type = "message", duration = 0)
+          message("[qc] ", paste0("Merging ", length(batch_paths), " batches..."))
           message("Merging batch ", i, "/", length(batch_paths), "...")
           
           # Load batch from disk
@@ -691,17 +697,12 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       message("Final RGSet size: ", format(object.size(rgSet), units = "auto"))
       
       # Step 3: Calculate detection p-values on the merged RGSet
-      removeNotification(notification_id)
-      notification_id <- showNotification("Calculating detection p-values...", 
-                                          type = "message", duration = 0)
+      message("[qc] ", "Calculating detection p-values...")
       message("Calculating detection p-values on merged dataset...")
       detP <- minfi::detectionP(rgSet)
       message("detP size: ", format(object.size(detP), units = "auto"))
       
       # Step 4: Generate QC report
-      removeNotification(notification_id)
-      notification_id <- showNotification("Generating QC report...", 
-                                          type = "message", duration = 0)
       message("Generating QC report...")
       minfi::qcReport(rgSet, 
                       sampNames = rgSet$Sample_Name, 
@@ -730,9 +731,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       
     } else {
       # Original processing for small datasets (<= batch_size samples or EPIC_V2)
-      removeNotification(notification_id)
-      notification_id <- showNotification(paste0("Small dataset (", n_samples, " samples). Loading all at once..."), 
-                       type = "message", duration = 0)
+      message("[qc] ", paste0("Small dataset (", n_samples, " samples). Loading all at once..."))
       message("Small dataset (", n_samples, " samples). Loading all at once...")
       
       rgSet <- minfi::read.metharray.exp(
@@ -754,17 +753,11 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       rgSet@colData@listData[index] <- lapply(rgSet@colData@listData[index], as.factor)
       
       # Calculate detection p-values
-      removeNotification(notification_id)
-      notification_id <- showNotification("Calculating detection p-values...", 
-                                          type = "message", duration = 0)
       message("Calculating detection p-values...")
       detP <- minfi::detectionP(rgSet)
       message("detP size: ", format(object.size(detP), units = "auto"))
       
       # Generate QC report
-      removeNotification(notification_id)
-      notification_id <- showNotification("Generating QC report...", 
-                                          type = "message", duration = 0)
       message("Generating QC report...")
       minfi::qcReport(rgSet, 
                       sampNames = rgSet$Sample_Name, 
@@ -788,8 +781,7 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       rm(rgSet, detP)
     }
     
-    removeNotification(notification_id)
-    showNotification(paste0("Completed ", array), type = "message", duration = 2)
+    message("[qc] ", paste0("Completed ", array))
     message("Completed ", array, "\n")
   }
   gc()
@@ -922,27 +914,25 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
   # Calculate boxplot statistics
   message("  Calculating boxplot statistics...")
   
-  # Convert beta matrix to long format for ggplot
-  beta_df <- as.data.frame(beta)
-  beta_long <- tidyr::pivot_longer(
-    beta_df,
-    cols = dplyr::everything(),
-    names_to = "sample",
-    values_to = "beta_value"
+  # Per-sample five-number summary, computed column-wise. Melting the matrix to
+  # long format first would build a ~56M-row tibble (~1.5 GB) for 800k x 70 just
+  # to produce one row per sample.
+  beta <- as.matrix(beta)
+  quants <- matrixStats::colQuantiles(beta, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+  stats_df <- data.frame(
+    sample = colnames(beta),
+    q1     = quants[, 1],
+    median = quants[, 2],
+    q3     = quants[, 3],
+    stringsAsFactors = FALSE
   )
-  
-  # Calculate summary statistics for each sample
-  stats_df <- beta_long %>%
-    dplyr::group_by(sample) %>%
-    dplyr::summarise(
-      q1 = quantile(beta_value, 0.25, na.rm = TRUE),
-      median = quantile(beta_value, 0.5, na.rm = TRUE),
-      q3 = quantile(beta_value, 0.75, na.rm = TRUE),
-      iqr = q3 - q1,
-      lower_whisker = max(q1 - 1.5 * iqr, min(beta_value, na.rm = TRUE)),
-      upper_whisker = min(q3 + 1.5 * iqr, max(beta_value, na.rm = TRUE)),
-      .groups = "drop"
-    )
+  stats_df$iqr <- stats_df$q3 - stats_df$q1
+  stats_df$lower_whisker <- pmax(stats_df$q1 - 1.5 * stats_df$iqr,
+                                 matrixStats::colMins(beta, na.rm = TRUE))
+  stats_df$upper_whisker <- pmin(stats_df$q3 + 1.5 * stats_df$iqr,
+                                 matrixStats::colMaxs(beta, na.rm = TRUE))
+  rownames(stats_df) <- NULL
   
   # Create color palette based on sample groups if available
   n_samples <- nrow(stats_df)
@@ -1006,7 +996,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   rm(keep)
 
   ## ---- 1. Normalization ----
-  notification_id <- showNotification(paste0("Normalizing ", array, " ..."), type = "message", duration = 0)
+  message("[beta] ", paste0("Normalizing ", array, " ..."))
   mSetSq <- normalizeMeth(rgSet, norm_method)
 
   ## ---- 2. Raw & normalized beta/M values ----
@@ -1017,19 +1007,16 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   # rm(beta_unf)
 
   ## ---- 3. Detection p-value filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Detection p-value filtering...", type = "message", duration = 0)
+  message("[beta] ", "Detection p-value filtering...")
   mSetSq <- filterDetectionP(rgSet, detP, mSetSq, threshold)
   rm(rgSet, detP)
 
   ## ---- 4. Probe filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Probe filtering...", type = "message", duration = 0)
+  message("[beta] ", "Probe filtering...")
   mSetSq_flt <- filterProbes(mSetSq, filter_dir)
 
   ## ---- 5. FFPE / Frozen adjustment ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("FFPE/ Froxen adjustment...", type = "message", duration = 0)
+  message("[beta] ", "FFPE/ Froxen adjustment...")
   meth   <- minfi::getMeth(mSetSq_flt)
   unmeth <- minfi::getUnmeth(mSetSq_flt)
   beta   <- adjustFFPE(meth, unmeth, mSetSq_flt$Tissue_Type)
@@ -1050,16 +1037,14 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   # rm(mVals_unf)
 
   ## ---- 7. Final SNP / XY / cross-hyb filtering ----
-  removeNotification(notification_id)
-  notification_id <- showNotification("Final SNP/XY/cross-hyb filtering...", type = "message", duration = 0)
+  message("[beta] ", "Final SNP/XY/cross-hyb filtering...")
   beta <- finalizeBeta(beta)
 
   ## ---- 8. Beta QCplots ----
   # plotPostQC(mSetSq_flt, array, array_beta_dir)
 
   ## ---- 9. Beta Boxplots ---
-  removeNotification(notification_id)
-  notification_id <- showNotification("Generating Beta boxplots...", type = "message", duration = 0)
+  message("[beta] ", "Generating Beta boxplots...")
   generate_beta_boxplot_static(array, beta, out_dir = array_beta_dir)
 
   ## ---- 10. Save outputs ----
@@ -1067,21 +1052,24 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   mset_path <- file.path(array_beta_dir, paste0("002_unfilteredData_", array, ".rds"))
   # mset_flt_path <- file.path(array_beta_dir, paste0("003_filteredData_", array, ".rds"))
 
-  removeNotification(notification_id)
-  notification_id <- showNotification("Saving beta matrix...", type = "message", duration = 0)
+  message("[beta] ", "Saving beta matrix...")
   message("Saving beta to: ", beta_path)
   saveRDS(beta, file = beta_path, compress = FALSE)
   rm(beta)
 
   message("Saving mSetSq to: ", mset_path)
   saveRDS(mSetSq, file = mset_path, compress = FALSE)
+
+  # Sidecar with just the sample metadata. The CNV dropdowns need only this, and
+  # deserialising the whole ~1.2 GB MethylSet to read it blocked the app for tens
+  # of seconds every time a selector changed.
+  saveRDS(as.data.frame(minfi::pData(mSetSq)), file = mset_pdata_path(mset_path))
   rm(mSetSq)
   
   # message("Saving mSetSq_flt to: ", mset_flt_path)
   # saveRDS(mSetSq_flt, file = mset_flt_path, compress = FALSE)
   
-  removeNotification(notification_id)
-  notification_id <- showNotification(paste0("Finished array: ", array), type = "message", duration = 0)
+  message("[beta] ", paste0("Finished array: ", array))
   message("Finished array: ", array)
 
   # Cleanup
@@ -1176,7 +1164,8 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
   # Save merged result
   message("Saving merged beta matrix...")
   saveRDS(beta_merged, file = file.path(beta_merge_dir, "beta_merged.rds"))
-  write.csv(beta_merged, file = file.path(beta_merge_dir, "beta_merged.csv"))
+  # The CSV export is written on demand by the download handler instead of here:
+  # it costs ~0.9 GB per analysis and most runs never download it.
   
   cat("\nMerged BetaMatrix completed at", Sys.time(), "\n")
   cat("Final size: ", format(object.size(beta_merged), units = "auto"), "\n")
@@ -1185,7 +1174,10 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
 }
 
 
-extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
+# Runs in a worker: reading a full beta-matrix CSV is minutes of work on a large
+# EPIC dataset and used to block every other user's session.
+# Returns paths and small values only -- the matrix stays on disk.
+extract_beta_and_targets <- function(input_dir, beta_dir){
   
   # Get all CSV files recursively from input directory
   all_files <- list.files(path = input_dir, pattern = "\\.csv$", 
@@ -1196,6 +1188,7 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   }
   
   # create merged directory inside beta_dir
+  m4a_progress(0, 3, "Locating the uploaded files")
   merged_dir <- file.path(beta_dir, "merged")
   if (!dir.exists(merged_dir)) {
     dir.create(merged_dir, recursive = TRUE)
@@ -1269,8 +1262,8 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   message("  Beta matrix: ", basename(beta_matrix_file))
   message("  Targets file: ", basename(targets_file))
   
-  removeNotification(notification_id)
-  notification_id <- showNotification("Loading Beta Matrix...", type="message", duration=0)
+  m4a_progress(1, 3, "Reading the beta matrix (this is the long part)")
+  message("[beta] Reading beta matrix CSV")
   
   beta <- read.csv(file.path(merged_dir, "beta_merged.csv"))
   # Set cpgs id as rownames
@@ -1280,14 +1273,153 @@ extract_beta_and_targets <- function(input_dir, beta_dir, notification_id){
   
   # Convert to matrix
   beta <- as.matrix(beta)
-  
-  removeNotification(notification_id)
-  notification_id <- showNotification("Loading Sample Sheet...", type="message", duration=3)
+
+  # Analysis workers load the beta matrix from disk rather than receiving it over
+  # the process boundary, so both ingest paths must leave an .rds behind (the
+  # IDAT path already writes one in merge_beta_matrix_from_disk).
+  saveRDS(beta, file.path(merged_dir, "beta_merged.rds"))
+
+  m4a_progress(2, 3, "Reading the sample sheet")
+  message("[beta] Reading sample sheet")
   
   targets <- read.csv(file.path(merged_dir, "targets_merged.csv"))
   
+  m4a_progress(3, 3, "Beta matrix ready")
+
   invisible(list(
-    beta = beta,
-    targets = targets
+    beta_path = file.path(merged_dir, "beta_merged.rds"),
+    samples   = colnames(beta),
+    n_probes  = nrow(beta),
+    targets   = targets
   ))
+}
+
+# IDAT ingest + QC, run as one worker job.
+#
+# Everything here is file-driven: IDATs are already on disk and the RGChannelSets
+# and QC reports are written back to disk, so only small values cross the process
+# boundary (a samples table in, a list of paths out). This is the longest blocking
+# step in the app and it runs on every IDAT analysis, so it is also the one that
+# matters most for keeping other users' sessions alive.
+run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_dir, qc_dir) {
+  m4a_progress(0, 3, "Separating unused IDATs")
+  message("[qc] Separating unused IDATs")
+  separate_unselected_idats(samples_df, selected_idats, preprocessing_dir)
+
+  m4a_progress(1, 3, "Reading the sample sheet")
+  message("[qc] Loading sample sheet")
+  parse_samplesheets(input_dir, preprocessing_dir)
+
+  # Free the raw upload before the memory-hungry part starts. recursive = TRUE
+  # matters: without it unlink() silently refuses to remove a directory.
+  unlink(file.path(input_dir, "*"), recursive = TRUE, force = TRUE)
+
+  m4a_progress(2, 3, "Reading IDATs and building QC reports (the long step)")
+  res <- load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir)
+
+  m4a_progress(3, 3, "Quality control complete")
+  res
+}
+
+
+# Beta-matrix generation for every array, run as one worker job.
+#
+# The last of the long blocking stages (15-40 min for 70 EPIC samples) and, like
+# QC, it runs on every IDAT analysis. It reads the RGChannelSets the QC stage left
+# on disk, so only thresholds and paths go in. The merged matrix is returned as a
+# path rather than a value: merge_beta_matrix_from_disk already writes it, and
+# sending ~450 MB back through the worker channel would undo the point.
+#
+# thresholds is a named character/numeric vector, one entry per array.
+run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
+                                qc_dir, filter_dir, beta_dir, preprocessing_dir,
+                                analysis_dir) {
+  beta_paths <- c()
+  mset_paths <- list()
+
+  total_steps <- length(arrays) + 2L
+  step <- 0L
+
+  for (array in arrays) {
+    m4a_progress(step, total_steps, paste0("Generating beta matrix for ", array))
+    step <- step + 1L
+    message("[beta] === Processing beta for ", array, " ===")
+    array_qc_dir <- file.path(qc_dir, array)
+    thr <- as.numeric(thresholds[[array]])
+
+    message("[beta] Loading RGSet and detP for ", array)
+    rgSet <- readRDS(qc_results$rgsets[[array]])
+    detP  <- readRDS(qc_results$detections[[array]])
+
+    # Per-sample failure rate at the chosen threshold
+    failed_perc <- colSums(detP > thr) / nrow(detP) * 100
+    write.csv(
+      failed_perc,
+      file = file.path(array_qc_dir,
+                       sprintf("1.1-Percentage_of_failed_probes_by_sample_detection_p_%.2f_%s.csv",
+                               thr, array)),
+      quote = FALSE, row.names = TRUE
+    )
+
+    p <- generate_detection_p_barplot(array = array, rgSet = rgSet,
+                                      detP = detP, threshold = thr)
+    ggplot2::ggsave(
+      filename = file.path(array_qc_dir,
+                           sprintf("1.0-Detection_P_barplot_threshold_%.2f_%s.png", thr, array)),
+      plot = p, width = 12, height = 6, dpi = 300
+    )
+    rm(p, failed_perc)
+
+    message("[beta] Generating beta matrix for ", array)
+    result_paths <- generate_beta_matrix(
+      array       = array,
+      rgSet       = rgSet,
+      detP        = detP,
+      norm_method = norm_method,
+      threshold   = thr,
+      filter_dir  = filter_dir,
+      beta_dir    = beta_dir
+    )
+
+    beta_paths <- c(beta_paths, result_paths$beta_path)
+    mset_paths[[array]] <- result_paths$mset_path
+
+    rm(rgSet, detP)
+    gc()
+  }
+
+  beta_merge_dir <- create_dir(file.path(beta_dir, "merged"))
+
+  m4a_progress(step, total_steps, "Merging beta matrices")
+  step <- step + 1L
+  message("[beta] Merging beta matrices from disk")
+  merge_beta_matrix_from_disk(beta_paths, beta_merge_dir)
+
+  m4a_progress(step, total_steps, "Merging sample sheets")
+  message("[beta] Merging sample sheets")
+  targets_result <- merge_samplesheets(arrays, preprocessing_dir, beta_merge_dir)
+
+  beta_path    <- file.path(beta_merge_dir, "beta_merged.rds")
+  targets_path <- file.path(beta_merge_dir, "targets_merged.rds")
+  saveRDS(targets_result$targets_merged, targets_path)
+
+  # The manifest is written here, in the worker, rather than by the session that
+  # started the job. A user who closes the tab mid-run still has the analysis
+  # completed and recorded, so returning to the URL picks it up.
+  write_analysis_manifest(
+    analysis_dir = analysis_dir,
+    type         = "IDATS",
+    array_names  = arrays,
+    mset_paths   = mset_paths,
+    beta_path    = beta_path,
+    targets_path = targets_path
+  )
+
+  m4a_progress(total_steps, total_steps, "Beta matrix ready")
+
+  list(
+    beta_path      = beta_path,
+    mset_paths     = mset_paths,
+    targets_merged = targets_result$targets_merged
+  )
 }

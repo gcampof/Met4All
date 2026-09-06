@@ -1,14 +1,30 @@
-plot_global_methylation <- function(
-    beta,
+# Compute half: runs in a worker, so it takes paths and returns only the small
+# summary the plot needs. It must not build the ggplot -- aes() quosures capture
+# their defining environment, which here holds the beta matrix and its subsets,
+# so returning a ggplot would drag hundreds of MB back across the boundary.
+prepare_global_methylation <- function(
+    beta_path,
     targets,
     id_col,
     comparison_col,
-    comparison_type = "between", 
-    group1          = NULL,      
-    group2          = NULL,   
-    annot,
-    color_palette
+    comparison_type = "between",
+    group1          = NULL,
+    group2          = NULL,
+    cache_dir,
+    annotation_pkg,
+    palette_dir,
+    palette_name
 ) {
+  beta  <- readRDS(beta_path)
+  annot <- setup_cache(
+    DIRS = list(cache = cache_dir, pathways = NULL),
+    cfg  = list(annotation_pkg = annotation_pkg, gene_set = NULL)
+  )$raw_annot
+
+  palettes      <- prepare_color_palettes(palette_dir)
+  color_palette <- palettes$all_palettes[[palette_name]]
+  if (is.null(color_palette)) color_palette <- palettes$all_palettes[[1]]
+
   # Prepare inputs
   align_res <- align_targets_to_beta_cols(beta, targets, id_col)
   beta2    <- align_res$beta2
@@ -30,15 +46,12 @@ plot_global_methylation <- function(
   # Handle comparison type
   if (comparison_type == "custom") {
     
-    shiny::validate(
-      shiny::need(length(group1) > 0, "Please assign at least one level to Group 1."),
-      shiny::need(length(group2) > 0, "Please assign at least one level to Group 2."),
-      shiny::need(
-        length(intersect(group1, group2)) == 0,
-        paste0("Levels cannot be in both groups: ",
-               paste(intersect(group1, group2), collapse = ", "))
-      )
-    )
+    if (length(group1) == 0) stop("Please assign at least one level to Group 1.")
+    if (length(group2) == 0) stop("Please assign at least one level to Group 2.")
+    if (length(intersect(group1, group2)) > 0) {
+      stop("Levels cannot be in both groups: ",
+           paste(intersect(group1, group2), collapse = ", "))
+    }
     
     # Recode groups: levels in group1 -> "Group 1", group2 -> "Group 2", rest dropped
     keep2  <- groups %in% c(group1, group2)
@@ -53,10 +66,9 @@ plot_global_methylation <- function(
     
   } else {
     
-    shiny::validate(
-      shiny::need(length(unique(groups)) >= 2,
-                  paste0("Column '", comparison_col, "' needs at least 2 groups."))
-    )
+    if (length(unique(groups)) < 2) {
+      stop("Column '", comparison_col, "' needs at least 2 groups.")
+    }
     
     comparison_label <- comparison_col
     present_groups   <- sort(unique(groups))
@@ -100,6 +112,24 @@ plot_global_methylation <- function(
     plot_title <- paste0("Global Mean Methylation by ", comparison_label)
   }
   
+  list(
+    plot_data        = plot_data,
+    matched_colors   = matched_colors,
+    plot_title       = plot_title,
+    comparison_col   = comparison_col,
+    comparisons_list = comparisons_list
+  )
+}
+
+
+# Plot half: cheap, runs in the main process from what the worker returned.
+plot_global_methylation <- function(prepared) {
+  plot_data      <- prepared$plot_data
+  matched_colors <- prepared$matched_colors
+  plot_title     <- prepared$plot_title
+  comparison_col <- prepared$comparison_col
+  comparisons_list <- prepared$comparisons_list
+
   # Plot with clean theme_classic styling
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = Group, y = SampleMean, fill = Group)) +
     ggplot2::geom_boxplot(outlier.shape = NA, alpha = 0.8, linewidth = 0.5) +

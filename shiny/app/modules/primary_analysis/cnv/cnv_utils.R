@@ -1,4 +1,9 @@
-# Prepare CNV data
+# Prepare CNV data.
+#
+# Runs inside an analysis worker, so it must stay free of Shiny session calls:
+# validation raises plain errors and progress goes to message(). The caller is
+# responsible for turning those into notifications. Inputs are file paths, not
+# in-memory objects, so nothing large crosses the process boundary.
 prepare_cnv_data <- function(
     mset_list,
     array_type,
@@ -6,28 +11,23 @@ prepare_cnv_data <- function(
     chrXY, 
     comparison_col,
     baseline = NULL,      
-    comparison = NULL
+    comparison = NULL,
+    cache_dir = NULL
 ){
   # Validate baseline and comparison
-  shiny::validate(
-    shiny::need(length(baseline) > 0, "Please assign at least one level to Baseline"),
-    shiny::need(length(comparison) > 0, "Please assign at least one level to Comparison"),
-    shiny::need(
-      length(intersect(baseline, comparison)) == 0,
-      paste0("Levels cannot be in both groups: ",
-             paste(intersect(baseline, comparison), collapse = ", "))
-    )
-  )
-  
+  if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
+  if (length(comparison) == 0) stop("Please assign at least one level to Comparison")
+  if (length(intersect(baseline, comparison)) > 0) {
+    stop("Levels cannot be in both groups: ",
+         paste(intersect(baseline, comparison), collapse = ", "))
+  }
+
   # Validate BED file BEFORE using it (check existence and not NULL/empty)
-  shiny::validate(
-    shiny::need(!is.null(bed_path) && nzchar(bed_path),
-                "Please upload a BED file"),
-    shiny::need(file.exists(bed_path),
-                "Selected BED file does not exist on disk")
-  )
-  
-  notification_id <- showNotification("Preparing CNV data...", type="message", duration=3)
+  if (is.null(bed_path) || !nzchar(bed_path)) stop("Please upload a BED file")
+  if (!file.exists(bed_path)) stop("Selected BED file does not exist on disk")
+
+  m4a_progress(0, 5, "Loading methylation set")
+  message("[cnv] Preparing CNV data...")
   
   # Fixed values
   genome = "hg19"
@@ -46,12 +46,8 @@ prepare_cnv_data <- function(
   }
   
   # Validate we have enough samples
-  shiny::validate(
-    shiny::need(length(normal_ids) >= 2, 
-                "Too few normal samples"),
-    shiny::need(length(case_ids) >= 1, 
-                "Too few comparison samples")
-  )
+  if (length(normal_ids) < 2) stop("Too few normal samples (need at least 2)")
+  if (length(case_ids) < 1) stop("Too few comparison samples (need at least 1)")
   
   mset_ctrl <- mset_object[, normal_ids]
   mset_case <- mset_object[, case_ids]
@@ -59,18 +55,39 @@ prepare_cnv_data <- function(
   cnv_ctrl <- CNV.load(mset_ctrl)
   cnv_case <- CNV.load(mset_case)
   
-  removeNotification(notification_id)
-  notification_id <- showNotification("Reading regions from BED file...", type="message", duration=0)
+  m4a_progress(1, 5, "Reading regions from the BED file")
+  message("[cnv] Reading regions from BED file...")
   detail_regions <- rtracklayer::import(bed_path, format = "bed")
-  removeNotification(notification_id)
-  notification_id <- showNotification("Creating annotation object...", type="message", duration=40)
-  
-  anno <- conumee2::CNV.create_anno(
-    detail_regions = detail_regions,
-    array_type     = array_type,
-    chrXY          = chrXY,
-    genome         = genome
-  )
+  # Building the bin annotation takes 1-2 minutes and depends only on the array,
+  # the genome, the chrXY flag and the BED contents - so it is cached across runs
+  # and users, keyed on a hash of the BED file.
+  anno <- NULL
+  anno_cache <- NULL
+  if (!is.null(cache_dir) && dir.exists(cache_dir)) {
+    bed_hash   <- unname(tools::md5sum(bed_path))
+    anno_cache <- file.path(cache_dir, paste0(
+      "cnv_anno__", array_type, "_xy", isTRUE(chrXY), "_", genome, "_", bed_hash, ".rds"
+    ))
+    if (file.exists(anno_cache)) {
+      message("[cnv] Loading cached annotation")
+      anno <- tryCatch(readRDS(anno_cache), error = function(e) NULL)
+    }
+  }
+
+  if (is.null(anno)) {
+    m4a_progress(2, 5, "Building the bin annotation (1-2 min)")
+    message("[cnv] Creating annotation object...")
+    anno <- conumee2::CNV.create_anno(
+      detail_regions = detail_regions,
+      array_type     = array_type,
+      chrXY          = chrXY,
+      genome         = genome
+    )
+    if (!is.null(anno_cache)) {
+      tryCatch(saveRDS(anno, anno_cache),
+               error = function(e) warning("[cnv] Could not cache annotation: ", e$message))
+    }
+  }
   
   probes_mset <- featureNames(mset_ctrl)
   probes_anno <- names(anno@probes)
@@ -79,8 +96,8 @@ prepare_cnv_data <- function(
   anno_filtered <- anno
   anno_filtered@probes <- anno@probes[common_probes]
   
-  removeNotification(notification_id)
-  notification_id <- showNotification("Getting gene annotation for each bin...", type="message", duration=0)
+  m4a_progress(3, 5, "Fitting and binning copy number")
+  message("[cnv] Getting gene annotation for each bin...")
   
   x <- CNV.fit(cnv_case, cnv_ctrl, anno_filtered)
   x <- CNV.bin(x)
@@ -101,10 +118,6 @@ prepare_cnv_data <- function(
   message("Bin counts per sample (var):   ", paste(len_var,   collapse = ", "))
   message("Bin count in anno:             ", length(anno_bins))
   
-  removeNotification(notification_id)
-  notification_id <- showNotification(paste0("NA variances per sample: ",  
-                                             paste(na_var, collapse = ", ")), type="message", duration=3)
-  notification_id <- showNotification(paste0("Bin count in anno: ",  length(anno_bins)), type="message", duration=3) 
   
   bad_bins <- Reduce(`|`, lapply(var_list, is.na))
   keep <- !bad_bins
@@ -115,7 +128,8 @@ prepare_cnv_data <- function(
   
   x <- CNV.segment(x)
   
-  notification_id <- showNotification("Finished processing data!", type="message", duration=3) 
+  m4a_progress(5, 5, "Copy number analysis complete")
+  message("[cnv] Finished processing data")
   
   x
 }
@@ -139,7 +153,9 @@ plot_pile_up <- function(cnv_data, baseline, comparison, out_dir) {
     mtext(subtitle, side = 3, line = 0, cex = 0.75, col = "grey40")
   }
   
-  png(png_file, width = 1400, height = 750, res = 120)
+  # Rendered at ~2x: the UI shows this at width:100%, so a small PNG gets
+  # upscaled by the browser and looks soft next to the exported file.
+  png(png_file, width = 2800, height = 1500, res = 240)
   draw_pileup()
   dev.off()
   
@@ -177,7 +193,7 @@ plot_cnv_per_sample <- function(cnv_data, sample_name, baseline, comparison, out
   title <- paste("Genome Plot -", sample_name)
   
   # Save as PNG
-  png(png_file, width = 1000, height = 650, res = 100)
+  png(png_file, width = 2000, height = 1300, res = 200)
   conumee2::CNV.genomeplot(cnv_data[sample_idx], main = title)
   dev.off()
   
