@@ -84,9 +84,37 @@ setup_analysis_dir <- function(common_dirs, cfg, session, resume_id = NULL) {
 # per-session reactiveVal, so N connected users cost N x 450 MB before any
 # analysis started. Every analysis now reads it from disk inside a worker, so
 # the main process only needs to know that it exists and what is in it.
+# Sidecar holding what beta_descriptor() needs, written by the worker that
+# produced the matrix.
+beta_meta_path <- function(beta_path) {
+  sub("\\.rds$", ".meta.rds", beta_path)
+}
+
+write_beta_meta <- function(beta_path, beta = NULL) {
+  if (is.null(beta)) {
+    beta <- tryCatch(readRDS(beta_path), error = function(e) NULL)
+    if (is.null(beta)) return(invisible(NULL))
+  }
+  meta <- list(samples = colnames(beta), n_probes = nrow(beta))
+  tryCatch(saveRDS(meta, beta_meta_path(beta_path)), error = function(e) NULL)
+  invisible(meta)
+}
+
 beta_descriptor <- function(path, beta = NULL) {
-  if (is.null(beta) && file.exists(path)) {
-    beta <- tryCatch(readRDS(path), error = function(e) NULL)
+  # Read the sidecar, not the matrix: this runs in the shared app process, where
+  # deserialising ~450 MB to read two attributes stalls every other session.
+  # Falls back to the matrix for analyses predating the sidecar.
+  if (is.null(beta)) {
+    meta <- if (file.exists(beta_meta_path(path))) {
+      tryCatch(readRDS(beta_meta_path(path)), error = function(e) NULL)
+    }
+    if (!is.null(meta$samples)) {
+      return(list(path = path, samples = meta$samples, n_probes = meta$n_probes))
+    }
+    if (file.exists(path)) {
+      beta <- tryCatch(readRDS(path), error = function(e) NULL)
+      if (!is.null(beta)) write_beta_meta(path, beta)   # backfill for next time
+    }
   }
   list(
     path     = path,

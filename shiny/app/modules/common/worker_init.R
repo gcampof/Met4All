@@ -9,14 +9,16 @@
 # Nothing in this file, or in anything it sources, may call Shiny session
 # functions (showNotification, shiny::validate, req): there is no session here.
 
-m4a_worker_init <- function(app_dir) {
-  # The "already initialised" marker must live in globalenv, alongside the
-  # functions it is guarding. mirai clears a daemon's globalenv between tasks
-  # but R options persist, so an option-based flag would survive while the
-  # definitions it vouched for were gone — the second task on a warm daemon then
-  # skips loading and fails with "could not find function". Keeping both in the
-  # same environment makes them consistent by construction.
-  if (exists(".m4a_worker_ready", envir = globalenv(), inherits = FALSE)) {
+# `heavy = FALSE` loads only what the upload/ingest step needs. That step does
+# unzipping and file moves, no Bioconductor at all, and the full stack costs
+# ~100 s to attach -- which the user was waiting through before anything started.
+m4a_worker_init <- function(app_dir, heavy = TRUE) {
+  # The marker lives in globalenv alongside the functions it guards: mirai clears
+  # a daemon's globalenv between tasks but R options persist, so an option-based
+  # flag would outlive the definitions it vouched for. It records the level, so a
+  # light worker still upgrades when a heavy job lands on it.
+  level <- get0(".m4a_worker_ready", envir = globalenv(), ifnotfound = "")
+  if (identical(level, "heavy") || (identical(level, "light") && !heavy)) {
     return(invisible(TRUE))
   }
 
@@ -31,34 +33,38 @@ m4a_worker_init <- function(app_dir) {
   options(device = function(...) grDevices::pdf(NULL))
 
   suppressPackageStartupMessages({
-    source("modules/common/all_imports.R")
-
-    # all_imports.R covers the Bioconductor stack only. These are attached by
-    # app.R in the main process, which a worker never runs — without them
-    # tidy_fgsea() (%>% and dplyr) and the xlsx writers fail here.
+    # Attached by app.R in the main process, which a worker never runs.
     library(dplyr)
     library(tibble)
     library(data.table)
     library(matrixStats)
-    library(openxlsx)
-    library(ggplot2)
-    library(RColorBrewer)
-    library(viridis)
-    library(colorspace)
+
+    if (heavy) {
+      source("modules/common/all_imports.R")
+      library(openxlsx)
+      library(ggplot2)
+      library(RColorBrewer)
+      library(viridis)
+      library(colorspace)
+    }
 
     source("modules/common/utils.R")
     source("modules/load_data/load_data_helper.R")
-    source("modules/primary_analysis/annotations.R")
-    source("modules/primary_analysis/utils.R")
-    source("modules/primary_analysis/cnv/cnv_utils.R")
-    source("modules/primary_analysis/differential/differential_utils.R")
-    source("modules/primary_analysis/heatmap/heatmap_utils.R")
-    source("modules/primary_analysis/mds/mds_utils.R")
-    source("modules/primary_analysis/pca/pca_utils.R")
-    source("modules/primary_analysis/umap/umap_utils.R")
-    source("modules/primary_analysis/global_met/global_utils.R")
+
+    if (heavy) {
+      source("modules/primary_analysis/annotations.R")
+      source("modules/primary_analysis/utils.R")
+      source("modules/primary_analysis/cnv/cnv_utils.R")
+      source("modules/primary_analysis/differential/differential_utils.R")
+      source("modules/primary_analysis/heatmap/heatmap_utils.R")
+      source("modules/primary_analysis/mds/mds_utils.R")
+      source("modules/primary_analysis/pca/pca_utils.R")
+      source("modules/primary_analysis/umap/umap_utils.R")
+      source("modules/primary_analysis/global_met/global_utils.R")
+    }
   })
 
-  assign(".m4a_worker_ready", TRUE, envir = globalenv())
+  assign(".m4a_worker_ready", if (heavy) "heavy" else "light", envir = globalenv())
+  gc(full = TRUE)   # loading the stack leaves ~700 MB of reclaimable pages
   invisible(TRUE)
 }

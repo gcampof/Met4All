@@ -34,8 +34,9 @@ library(ggpubr)
 options(shiny.reactlog = nzchar(Sys.getenv("M4A_REACTLOG")))
 options(shiny.maxRequestSize = 10 * 1024^3)
 
-# Stop data.table/BLAS/BiocParallel from each sizing themselves to the whole host.
-m4a_apply_thread_caps()
+# Must run before the worker pool spawns: daemons inherit the thread budget from
+# the environment at their own startup. This process keeps one thread.
+m4a_apply_thread_caps(local_threads = 1L)
 
 # The worker pool starts lazily on the first heavy analysis; make sure it does
 # not outlive the app.
@@ -199,6 +200,13 @@ server <- function(input, output, session) {
   # Publish the id so the browser URL is the bookmark. Nothing else is needed to
   # come back to this analysis later.
   updateQueryString(paste0("?analysis=", DIRS$analysis_id), mode = "replace")
+
+  # Start the worker pool now, in the background. A cold worker costs ~100 s to
+  # load the Bioconductor stack, and the first job of an IDAT run is the ingest,
+  # so warming only after a beta matrix exists left that cost sitting in front of
+  # the user. Done here it overlaps the upload and is paid once per process.
+  session$onFlushed(function() try(m4a_warm_workers(getwd()), silent = TRUE),
+                    once = TRUE)
 
   APP_CACHE <- reactiveVal(NULL)
   

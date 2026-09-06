@@ -7,6 +7,8 @@ services:
     volumes:
       - ./shiny/logs:/var/log/shiny-server
       - ./shiny/app/data:/srv/shiny-server/data
+    # Cap the container's memory
+    mem_limit: ${M4A_MEM_LIMIT:-24g}
     environment:
       - R_CONFIG_ACTIVE=default
     restart: unless-stopped

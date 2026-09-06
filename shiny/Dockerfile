@@ -58,16 +58,21 @@ RUN mkdir -p /opt/met4all/cache && \
 
 ENV M4A_CACHE_DIR=/opt/met4all/cache
 
-# Concurrency limits. Threads are capped at the process level so OpenMP (data.table)
-# and BLAS cannot each grab the whole host; per-worker limits are applied on top of
-# these in modules/common/concurrency.R.
+# Concurrency limits.
 #   M4A_MAX_JOBS        concurrent heavy analyses (worker pool size)
 #   M4A_THREADS_PER_JOB threads inside each worker
-# Sizing rule: RAM ~= 2 GB + M4A_MAX_JOBS * 5 GB.
-ENV OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    M4A_MAX_JOBS=2 \
-    M4A_THREADS_PER_JOB=2
+#
+# OMP_NUM_THREADS/OPENBLAS_NUM_THREADS are deliberately NOT set here: pinning
+# them caps data.table for the life of the process (setDTthreads cannot raise a
+# value above the OpenMP limit read at startup). app.R sets them before the
+# worker pool spawns, so each daemon inherits the right value.
+#
+# Keep M4A_MAX_JOBS * M4A_THREADS_PER_JOB <= host cores.
+# Memory scales with cohort size, not just job count: one 252-sample EPIC
+# ingest peaks at ~16 GB. Set a mem_limit in compose so an overrun kills the
+# container instead of the host.
+ENV M4A_MAX_JOBS=2 \
+    M4A_THREADS_PER_JOB=4
 
 # Create runtime directionres with correct ownership
 RUN mkdir -p /srv/shiny-server/data /srv/shiny-server/cache && \

@@ -48,10 +48,9 @@ RUN mkdir -p /home/rstudio/.cache/R/ExperimentHub && \
 # the way it does in production.
 #   M4A_MAX_JOBS        concurrent analyses (worker pool size)
 #   M4A_THREADS_PER_JOB threads inside each worker
-ENV OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    M4A_MAX_JOBS=2 \
-    M4A_THREADS_PER_JOB=2
+# OMP/BLAS are left unset on purpose -- see the note in shiny/Dockerfile.
+ENV M4A_MAX_JOBS=2 \
+    M4A_THREADS_PER_JOB=4
 
 # The annotation cache is not baked into this image (its build context is
 # ./rstudio and it has no copy of the app). Point it at the mounted project

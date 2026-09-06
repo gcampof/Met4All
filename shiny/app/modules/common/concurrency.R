@@ -8,7 +8,8 @@
 #   M4A_THREADS_PER_JOB threads inside each worker
 #
 # Keep M4A_MAX_JOBS * M4A_THREADS_PER_JOB <= host cores.
-# Sizing rule for memory: RAM ~= 2 GB + M4A_MAX_JOBS * 5 GB.
+# Memory is the binding constraint and scales with cohort size, not just job
+# count: a 252-sample EPIC ingest peaks at ~16 GB. See m4a_estimate_job_gb().
 
 m4a_env_int <- function(name, default) {
   value <- suppressWarnings(as.integer(Sys.getenv(name)))
@@ -17,7 +18,7 @@ m4a_env_int <- function(name, default) {
 
 m4a_max_jobs <- function() m4a_env_int("M4A_MAX_JOBS", 2L)
 
-m4a_threads_per_job <- function() m4a_env_int("M4A_THREADS_PER_JOB", 2L)
+m4a_threads_per_job <- function() m4a_env_int("M4A_THREADS_PER_JOB", 4L)
 
 m4a_min_free_gb <- function() m4a_env_int("M4A_MIN_FREE_GB", 15L)
 
@@ -66,22 +67,72 @@ m4a_check_disk <- function(path, upload_bytes = 0, expansion = 6) {
   invisible(free)
 }
 
-# Apply the per-job thread cap to every library that would otherwise size itself
-# from detectCores(). Call once at process start and once inside each worker.
-# OMP/BLAS are also set in the Dockerfile, because OpenMP reads its environment
-# when the pool is first created and may ignore a later Sys.setenv.
-m4a_apply_thread_caps <- function(threads = m4a_threads_per_job()) {
+# --- Memory headroom ---------------------------------------------------------
+# Peak RSS, not CPU, is what limits this app. Pair this with a container
+# mem_limit so an overrun kills the container rather than the host.
+
+# Available memory in GB, or NA if unreadable.
+m4a_available_ram_gb <- function() {
+  tryCatch({
+    if (!file.exists("/proc/meminfo")) return(NA_real_)
+    lines <- readLines("/proc/meminfo", n = 60L, warn = FALSE)
+    hit <- grep("^MemAvailable:", lines, value = TRUE)
+    if (length(hit) == 0L) return(NA_real_)
+    kb <- as.numeric(sub("^MemAvailable:\\s*([0-9]+).*$", "\\1", hit[1]))
+    if (is.na(kb)) NA_real_ else kb / 1024^2
+  }, error = function(e) NA_real_)
+}
+
+# Rough peak for one ingest job, calibrated on a measured run: 220 EPIC + 32
+# 450K peaked at 16.1 GB. The slope is dominated by minfi::qcReport.
+m4a_estimate_job_gb <- function(n_samples, array_type = "EPIC") {
+  per_sample <- switch(toupper(as.character(array_type)),
+                       "450K"    = 0.040,
+                       "EPIC_V2" = 0.085,
+                       0.070)          # EPIC and anything unrecognised
+  2.0 + per_sample * max(as.numeric(n_samples), 1)
+}
+
+# Refuse to start when memory is clearly short. Never blocks when availability
+# cannot be determined.
+m4a_check_memory <- function(n_samples, array_type = "EPIC", what = "This analysis") {
+  need <- m4a_estimate_job_gb(n_samples, array_type)
+  have <- m4a_available_ram_gb()
+  if (is.na(have)) return(invisible(NA_real_))
+
+  if (have < need) {
+    stop(sprintf(
+      paste0("%s needs roughly %.0f GB of memory for %s %s samples, but only ",
+             "%.1f GB is available. Wait for the running analyses to finish, or ",
+             "start it on a machine with more memory."),
+      what, need, format(n_samples), array_type, have),
+      call. = FALSE)
+  }
+  invisible(have)
+}
+
+
+# Cap every library that would otherwise size itself from detectCores().
+#
+# `threads` is the WORKER budget. It goes into the environment because mirai
+# daemons inherit it at spawn, and process start is the only moment OpenMP and
+# OpenBLAS read it -- which is also why it must not be baked into the Dockerfile
+# (a 1 there caps data.table permanently; setDTthreads cannot raise it back).
+# `local_threads` is what this process uses; the app passes 1, since it
+# dispatches rather than computes.
+m4a_apply_thread_caps <- function(threads = m4a_threads_per_job(),
+                                  local_threads = threads) {
   Sys.setenv(OMP_NUM_THREADS = threads, OPENBLAS_NUM_THREADS = threads)
 
   if (requireNamespace("data.table", quietly = TRUE)) {
-    data.table::setDTthreads(threads)
+    data.table::setDTthreads(local_threads)
   }
 
   # fgsea and friends fall back to bpparam(), which defaults to detectCores() - 2.
   if (requireNamespace("BiocParallel", quietly = TRUE)) {
     BiocParallel::register(
-      if (threads > 1L) {
-        BiocParallel::MulticoreParam(workers = threads)
+      if (local_threads > 1L) {
+        BiocParallel::MulticoreParam(workers = local_threads)
       } else {
         BiocParallel::SerialParam()
       }
@@ -181,7 +232,9 @@ m4a_queue_message <- function() {
 # `session_dir` is this analysis's directory. It is where the worker publishes
 # progress and where its log is written, so the user can watch a long run and
 # download what it printed afterwards.
-m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL) {
+# `heavy = FALSE` for jobs that need no Bioconductor (see m4a_worker_init).
+m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL,
+                       heavy = TRUE) {
   stopifnot(is.character(fn_name), length(fn_name) == 1L, is.list(args))
 
   log_file <- if (!is.null(session_dir)) {
@@ -200,10 +253,14 @@ m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL) {
         # source() defines into the worker's globalenv, but a mirai expression is
         # not evaluated in a child of globalenv, so the lookup must be explicit —
         # otherwise this fails with "could not find function".
-        get("m4a_worker_init", envir = globalenv())(app_dir)
+        get("m4a_worker_init", envir = globalenv())(app_dir, heavy)
 
-        # Where m4a_progress() should publish to, for this task only.
+        # Cleared on the way out: daemons are persistent, so a leftover value
+        # would send the next user's progress into this user's directory.
         options(m4a.progress_dir = session_dir)
+        on.exit(options(m4a.progress_dir = NULL), add = TRUE)
+        # Hand pages back before the daemon goes idle.
+        on.exit(gc(full = TRUE), add = TRUE)
 
         # Capture what the analysis prints into this analysis's own log. sink()
         # is process-global, which is exactly why it must never be used in the
@@ -232,7 +289,8 @@ m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL) {
       args        = args,
       session_dir = session_dir,
       log_file    = log_file,
-      app_dir = app_dir
+      app_dir     = app_dir,
+      heavy       = heavy
     ))
   }
 
@@ -388,11 +446,16 @@ m4a_warm_workers <- function(app_dir = getwd()) {
   if (isTRUE(getOption("m4a.workers_warmed"))) return(invisible(TRUE))
   options(m4a.workers_warmed = TRUE)
 
-  handles <- lapply(seq_len(m4a_max_jobs()), function(i) {
+  # Warm ONE daemon, not the whole pool. A daemon holding the Bioconductor stack
+  # costs ~2 GB resident, and warming every slot spent that before any analysis
+  # started. One is enough to hide the start-up latency from the first job; the
+  # rest initialise only if a second user actually runs something concurrently.
+  handles <- lapply(seq_len(m4a_env_int("M4A_WARM_WORKERS", 1L)), function(i) {
     mirai::mirai(
       {
         source(file.path(app_dir, "modules/common/worker_init.R"), local = FALSE)
-        get("m4a_worker_init", envir = globalenv())(app_dir)
+        # Warming is always the full stack: that is the cost being paid up front.
+        get("m4a_worker_init", envir = globalenv())(app_dir, heavy = TRUE)
         # Hold the slot briefly so the next warm-up lands on a different daemon.
         Sys.sleep(1)
         TRUE
@@ -402,6 +465,7 @@ m4a_warm_workers <- function(app_dir = getwd()) {
   })
 
   assign(".M4A_WARM_HANDLES", handles, envir = globalenv())
-  message("[workers] warming ", m4a_max_jobs(), " worker(s) in the background")
+  message("[workers] warming ", length(handles), " of ", m4a_max_jobs(),
+          " worker(s) in the background")
   invisible(TRUE)
 }

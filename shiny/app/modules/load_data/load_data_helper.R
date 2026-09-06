@@ -497,20 +497,30 @@ separate_unselected_idats <- function(idat_df, selected_indices, preprocessing_d
 }
 
 
-generate_detection_p_barplot_subset <- function(array, rgSet, detP, threshold, total_samples, kept_samples) {
-  mean_detP <- colMeans(detP, na.rm = TRUE)
-  
+# QC review barplot, drawn from the summary sidecar rather than from detP.
+generate_detection_p_barplot_summary <- function(array, summary, threshold,
+                                                 top_n = 100L) {
   plot_df <- data.frame(
-    Sample = colnames(detP),
-    MeanDetP = mean_detP,
-    Group = factor(rgSet$Sample_Group)
+    Sample   = summary$samples,
+    MeanDetP = as.numeric(summary$mean_detP),
+    Group    = factor(summary$sample_group),
+    stringsAsFactors = FALSE
   )
-  
-  # Data is already sorted by MeanDetP descending from the subsetting step
-  # Just ensure factor levels maintain the order
-  plot_df <- plot_df[order(-plot_df$MeanDetP), ]
+
+  total_samples <- nrow(plot_df)
+  plot_df <- plot_df[order(-plot_df$MeanDetP), , drop = FALSE]
+  kept_samples <- min(top_n, total_samples)
+  plot_df <- head(plot_df, kept_samples)
   plot_df$Sample <- factor(plot_df$Sample, levels = plot_df$Sample)
-  
+
+  title <- if (kept_samples < total_samples) {
+    paste("Mean detection p-values for", array,
+          sprintf("(Top %d of %d samples)", kept_samples, total_samples))
+  } else {
+    paste("Mean detection p-values for", array,
+          sprintf("(%d samples)", total_samples))
+  }
+
   ggplot(plot_df, aes(x = Sample, y = MeanDetP, fill = Group)) +
     geom_col() +
     scale_fill_manual(values = col_vector) +
@@ -520,12 +530,7 @@ generate_detection_p_barplot_subset <- function(array, rgSet, detP, threshold, t
       linetype = "dashed",
       linewidth = 0.8
     ) +
-    labs(
-      title = paste("Mean detection p-values for", array,
-                    sprintf("(Top %d of %d samples)", kept_samples, total_samples)),
-      y = "Mean detection p-value",
-      x = NULL
-    ) +
+    labs(title = title, y = "Mean detection p-value", x = NULL) +
     theme_minimal() +
     theme(
       axis.text.x = element_text(angle = 90, hjust = 1, size = 8),
@@ -534,12 +539,13 @@ generate_detection_p_barplot_subset <- function(array, rgSet, detP, threshold, t
 }
 
 
-generate_detection_p_barplot <- function(array, rgSet, detP, threshold) {
-  mean_detP <- colMeans(detP, na.rm = TRUE)
-  
+generate_detection_p_barplot <- function(array, rgSet, detP, threshold,
+                                         mean_detP = NULL) {
+  if (is.null(mean_detP)) mean_detP <- matrixStats::colMeans2(detP, na.rm = TRUE)
+
   plot_df <- data.frame(
     Sample = colnames(detP),
-    MeanDetP = mean_detP,
+    MeanDetP = as.numeric(mean_detP),
     Group = factor(rgSet$Sample_Group)
   )
   
@@ -567,9 +573,56 @@ generate_detection_p_barplot <- function(array, rgSet, detP, threshold) {
 
 # progress_base / progress_total let the caller fold this function's steps into
 # one continuous bar instead of restarting it at 0 half way through a long run.
+# Per-sample QC statistics for the review screen, written by the worker so the
+# app process never has to load the RGChannelSet or detP itself. Failure counts
+# are precomputed for the thresholds the UI offers.
+
+M4A_QC_THRESHOLDS <- c(0.01, 0.05, 0.10)
+
+qc_summary_path <- function(array_qc_dir, array) {
+  file.path(array_qc_dir, paste0(array, "_qc_summary.rds"))
+}
+
+write_qc_summary <- function(array, detP, rgSet, array_qc_dir,
+                             thresholds = M4A_QC_THRESHOLDS) {
+  n_probes <- nrow(detP)
+
+  # Column at a time: `detP > thr` over the whole matrix would allocate a
+  # full-size logical per threshold.
+  failed <- t(vapply(seq_len(ncol(detP)), function(j) {
+    col <- detP[, j]
+    vapply(thresholds, function(thr) sum(col > thr, na.rm = TRUE), numeric(1))
+  }, numeric(length(thresholds))))
+  dimnames(failed) <- list(colnames(detP), format(thresholds))
+
+  summary <- list(
+    array         = array,
+    samples       = colnames(detP),
+    sample_group  = as.character(rgSet$Sample_Group),
+    sample_name   = as.character(rgSet$Sample_Name),
+    n_probes      = n_probes,
+    mean_detP     = matrixStats::colMeans2(detP, na.rm = TRUE),
+    failed_counts = failed,
+    thresholds    = thresholds
+  )
+  names(summary$mean_detP) <- colnames(detP)
+
+  saveRDS(summary, qc_summary_path(array_qc_dir, array))
+  invisible(summary)
+}
+
+read_qc_summary <- function(array_qc_dir, array) {
+  p <- qc_summary_path(array_qc_dir, array)
+  if (!file.exists(p)) return(NULL)
+  tryCatch(readRDS(p), error = function(e) NULL)
+}
+
+
 load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir,
                                           progress_base = 0L, progress_total = NULL) {
-  batch_size = 110
+  # Samples per pass. Both bound a transient, not the finished object.
+  read_chunk <- m4a_env_int("M4A_QC_READ_CHUNK", 32L)
+  detp_chunk <- m4a_env_int("M4A_QC_DETP_CHUNK", 24L)
   array_types <- get_array_types()
   arrays_used <- c()
   
@@ -626,6 +679,12 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir,
     
     message("[qc] ", paste0("Loaded targets for ", n_samples, " samples"))
     message("Loaded targets for ", n_samples, " samples")
+
+    if (is.null(n_samples) || n_samples == 0L) {
+      stop("No samples matched the sample sheet for ", array,
+           ". Check that its Basename (or Slide + Array) columns match the ",
+           "IDAT file names.")
+    }
     
     if (array == "450K") {
       library(IlluminaHumanMethylation450kmanifest)
@@ -635,193 +694,142 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir,
       library(IlluminaHumanMethylationEPICv2manifest)
     } 
     
-    # Determine if we need batch processing
-    if (n_samples > batch_size & array != "EPIC_V2") {
-      message("[qc] ", paste0("Large dataset detected (", n_samples, " samples). Using batch processing"))
-      message("Large dataset detected (", n_samples, " samples). Using batch processing with batch size ", batch_size)
-      
-      # Calculate number of batches
-      n_batches <- ceiling(n_samples / batch_size)
-      message("Processing in ", n_batches, " batches")
-      
-      step(paste0("Reading ", array, " IDATs in ", n_batches, " batches"))
+    # Read in chunks into preallocated assay matrices. minfi holds every IDAT of
+    # one call in memory before building the matrices, so chunking bounds the
+    # peak. Addresses are intersected as we go because IDATs of different
+    # manifest versions can share an array folder, and a single read.metharray.exp
+    # call reduces to their common addresses.
+    step(paste0("Reading ", n_samples, " ", array, " samples"))
 
-      # Create directory for batch files
-      batch_dir <- create_dir(file.path(array_qc_dir, "batches"))
-      batch_paths <- c()
-      
-      # Step 1: Load and save each batch individually
-      for (batch_idx in 1:n_batches) {
-        start_idx <- (batch_idx - 1) * batch_size + 1
-        end_idx <- min(batch_idx * batch_size, n_samples)
-        
-        message("[qc] ", paste0("Processing batch ", batch_idx, "/", n_batches))
-        message("Processing batch ", batch_idx, "/", n_batches, " (samples ", start_idx, "-", end_idx, ")")
-        
-        # Load batch targets
-        batch_targets <- targets[start_idx:end_idx, ]
-        
-        # Load RGSet for this batch only
-        # extended = FALSE: the extended set carries GreenSD/RedSD/NBeads on top
-        # of the two colour channels, so it is ~2.5x the I/O, the RAM and the
-        # saved .rds. Nothing downstream reads them (detectionP, qcReport and
-        # every preprocess* method take a plain RGChannelSet), so they are pure
-        # cost. Beta values are unaffected.
-        batch_rgSet <- minfi::read.metharray.exp(
-          base = array_prep_dir, 
-          targets = batch_targets, 
-          verbose = FALSE, 
-          force = TRUE, 
-          extended = FALSE
-        )
-        message("  Batch RGSet size: ", format(object.size(batch_rgSet), units = "auto"))
-        
-        # Prepare metadata for this batch
-        batch_targets$ID <- paste(batch_targets$Sample_Group, batch_targets$Sample_Name, sep = "_")
-        minfi::sampleNames(batch_rgSet) <- batch_targets$ID
-        
-        # Convert to factors
-        index <- seq_along(batch_rgSet@colData@listData)
-        batch_rgSet@colData@listData[index] <- lapply(batch_rgSet@colData@listData[index], as.factor)
-        
-        # Save individual batch to disk
-        batch_path <- file.path(batch_dir, paste0(array, "_batch_", batch_idx, ".rds"))
-        message("  Saving batch to: ", batch_path)
-        saveRDS(batch_rgSet, file = batch_path, compress = FALSE)
-        batch_paths <- c(batch_paths, batch_path)
-        
-        # Clean up batch from memory
-        rm(batch_rgSet, batch_targets)
+    read_chunks <- split(seq_len(n_samples), ceiling(seq_len(n_samples) / read_chunk))
+    targets$ID  <- paste(targets$Sample_Group, targets$Sample_Name, sep = "_")
+    sample_ids  <- targets$ID
+
+    Green <- NULL; Red <- NULL; addresses <- NULL; array_annotation <- NULL
+    col_data <- vector("list", length(read_chunks))
+
+    for (i in seq_along(read_chunks)) {
+      idx <- read_chunks[[i]]
+      if (length(read_chunks) > 1L) {
+        message("Reading chunk ", i, "/", length(read_chunks),
+                " (samples ", idx[1], "-", idx[length(idx)], ")")
       }
-      gc()
-      message("\nAll batches saved. Now merging ", length(batch_paths), " batches...")
-      
-      # Step 2: Merge all batches from disk
-      # Load first batch as base
-      message("Loading first batch as base...")
-      rgSet <- readRDS(batch_paths[1])
-      message("  Base RGSet size: ", format(object.size(rgSet), units = "auto"))
-      
-      # Load and merge remaining batches one by one
-      if (length(batch_paths) > 1) {
-        for (i in 2:length(batch_paths)) {
-          
-          message("[qc] ", paste0("Merging ", length(batch_paths), " batches..."))
-          message("Merging batch ", i, "/", length(batch_paths), "...")
-          
-          # Load batch from disk
-          batch_rgSet <- readRDS(batch_paths[i])
-          message("  Batch size: ", format(object.size(batch_rgSet), units = "auto"))
-          
-          # Combine with main RGSet
-          rgSet <- minfi::combineArrays(rgSet, batch_rgSet, 
-                                        outType = ifelse(array == "EPIC", 
-                                                         "IlluminaHumanMethylationEPIC",
-                                                         "IlluminaHumanMethylation450k"))
-          
-          # Clean up batch and force garbage collection
-          rm(batch_rgSet)
-          message("  Combined RGSet size: ", format(object.size(rgSet), units = "auto"))
-        }
-      }
-      gc()
-      message("Final RGSet size: ", format(object.size(rgSet), units = "auto"))
-      
-      # Step 3: Calculate detection p-values on the merged RGSet
-      step(paste0("Calculating detection p-values for ", array))
-      message("[qc] ", "Calculating detection p-values...")
-      message("Calculating detection p-values on merged dataset...")
-      detP <- minfi::detectionP(rgSet)
-      message("detP size: ", format(object.size(detP), units = "auto"))
-      
-      # Step 4: Generate QC report
-      step(paste0("Building the ", array, " QC report"))
-      message("Generating QC report...")
-      minfi::qcReport(rgSet, 
-                      sampNames = rgSet$Sample_Name, 
-                      sampGroups = rgSet$Sample_Group,
-                      pdf = file.path(array_qc_dir, paste0("2.0-QC_Report_", array, ".pdf")))
-      
-      # Step 5: Save final merged objects
-      rgset_path <- file.path(array_qc_dir, paste0(array, "_rgSet.rds"))
-      detp_path <- file.path(array_qc_dir, paste0(array, "_detP.rds"))
-      
-      step(paste0("Saving ", array, " results to disk"))
-      message("Saving final RGSet to disk: ", rgset_path)
-      saveRDS(rgSet, file = rgset_path, compress = FALSE)
-      
-      message("Saving final detP to disk: ", detp_path)
-      # compress = FALSE: gzipping a 70-sample detP takes over a minute of pure
-      # CPU to save ~150 MB, and it is read back within the same analysis.
-      saveRDS(detP, file = detp_path, compress = FALSE)
-      
-      # Step 6: Optionally delete batch files to save space
-      message("Cleaning up batch files...")
-      unlink(batch_dir, recursive = TRUE)
-      
-      qc_results$rgsets[[array]] <- rgset_path
-      qc_results$detections[[array]] <- detp_path
-      
-      # Clean up
-      rm(rgSet, detP)
-      
-    } else {
-      # Original processing for small datasets (<= batch_size samples or EPIC_V2)
-      step(paste0("Reading ", n_samples, " ", array, " samples"))
-      message("[qc] ", paste0("Small dataset (", n_samples, " samples). Loading all at once..."))
-      message("Small dataset (", n_samples, " samples). Loading all at once...")
-      
-      # See the note on the batch path: the extended assays are never read.
-      rgSet <- minfi::read.metharray.exp(
-        base = array_prep_dir, 
-        targets = targets, 
-        verbose = TRUE, 
-        force = TRUE, 
+
+      part <- minfi::read.metharray.exp(
+        base     = array_prep_dir,
+        targets  = targets[idx, , drop = FALSE],
+        verbose  = FALSE,
+        force    = TRUE,
         extended = FALSE
       )
-      
-      message("RGSet size: ", format(object.size(rgSet), units = "auto"))
-      
-      # Prepare metadata
-      targets$ID <- paste(targets$Sample_Group, targets$Sample_Name, sep = "_")
-      minfi::sampleNames(rgSet) <- targets$ID
-      
-      # Convert to factors
-      index <- seq_along(rgSet@colData@listData)
-      rgSet@colData@listData[index] <- lapply(rgSet@colData@listData[index], as.factor)
-      
-      # Calculate detection p-values
-      step(paste0("Calculating detection p-values for ", array))
-      message("Calculating detection p-values...")
-      detP <- minfi::detectionP(rgSet)
-      message("detP size: ", format(object.size(detP), units = "auto"))
-      
-      # Generate QC report
-      step(paste0("Building the ", array, " QC report"))
-      message("Generating QC report...")
-      minfi::qcReport(rgSet, 
-                      sampNames = rgSet$Sample_Name, 
-                      sampGroups = rgSet$Sample_Group,
-                      pdf = file.path(array_qc_dir, paste0("2.0-QC_Report_", array, ".pdf")))
-      
-      # Save to disk
-      rgset_path <- file.path(array_qc_dir, paste0(array, "_rgSet.rds"))
-      detp_path <- file.path(array_qc_dir, paste0(array, "_detP.rds"))
-      
-      step(paste0("Saving ", array, " results to disk"))
-      message("Saving RGSet to disk: ", rgset_path)
-      saveRDS(rgSet, file = rgset_path, compress = FALSE)
-      
-      message("Saving detP to disk: ", detp_path)
-      # See the note on the batch path: compression here is not worth the minute.
-      saveRDS(detP, file = detp_path, compress = FALSE)
-      
-      qc_results$rgsets[[array]] <- rgset_path
-      qc_results$detections[[array]] <- detp_path
-      
-      # Clean up
-      rm(rgSet, detP)
+      minfi::sampleNames(part) <- sample_ids[idx]
+
+      g <- minfi::getGreen(part)
+      r <- minfi::getRed(part)
+
+      if (is.null(Green)) {
+        addresses        <- rownames(g)
+        array_annotation <- minfi::annotation(part)
+        # Seeded from g[1] to inherit the assay's integer storage mode.
+        Green <- matrix(g[1], nrow = length(addresses), ncol = n_samples,
+                        dimnames = list(addresses, sample_ids))
+        Red   <- matrix(r[1], nrow = length(addresses), ncol = n_samples,
+                        dimnames = list(addresses, sample_ids))
+      } else if (!identical(rownames(g), addresses)) {
+        common <- intersect(addresses, rownames(g))
+        if (length(common) == 0L) {
+          stop("Samples in ", array, " share no probe addresses with each other. ",
+               "The folder probably mixes incompatible array types.")
+        }
+        if (length(common) < length(addresses)) {
+          message("  Chunk ", i, " uses a different manifest; reducing to ",
+                  length(common), " shared addresses")
+          Green <- Green[common, , drop = FALSE]
+          Red   <- Red[common, , drop = FALSE]
+          addresses <- common
+        }
+      }
+
+      # The chunk may be a superset, or ordered differently.
+      if (!identical(rownames(g), addresses)) {
+        g <- g[addresses, , drop = FALSE]
+        r <- r[addresses, , drop = FALSE]
+      }
+
+      Green[, idx] <- g
+      Red[, idx]   <- r
+      col_data[[i]] <- as.data.frame(SummarizedExperiment::colData(part))
+
+      rm(part, g, r)
+      gc()
     }
+
+    rgSet <- minfi::RGChannelSet(Green = Green, Red = Red,
+                                 annotation = array_annotation)
+    rm(Green, Red)
+    SummarizedExperiment::colData(rgSet) <-
+      S4Vectors::DataFrame(do.call(rbind, col_data))
+    rm(col_data)
+
+    # Once, on the assembled object: per chunk each got its own factor levels.
+    index <- seq_along(rgSet@colData@listData)
+    rgSet@colData@listData[index] <- lapply(rgSet@colData@listData[index], as.factor)
+
+    gc(full = TRUE)   # hand the reader's transients back to the OS
+
+    # Column blocks into a preallocated matrix. detectionP copies the whole Red
+    # and Green assays out of whatever it is handed, so chunking keeps the live
+    # heap (and R's GC cost, which is what made this slow) down. Exact: each
+    # column's background comes from its own control probes.
+    step(paste0("Calculating detection p-values for ", array))
+    message("Calculating detection p-values...")
+
+    detp_chunks <- split(seq_len(n_samples), ceiling(seq_len(n_samples) / detp_chunk))
+    detP <- NULL
+    for (i in seq_along(detp_chunks)) {
+      idx <- detp_chunks[[i]]
+      part_detP <- minfi::detectionP(rgSet[, idx, drop = FALSE])
+      if (is.null(detP)) {
+        detP <- matrix(NA_real_, nrow = nrow(part_detP), ncol = n_samples,
+                       dimnames = list(rownames(part_detP), colnames(rgSet)))
+      }
+      detP[, idx] <- part_detP
+      rm(part_detP)
+      gc()
+    }
+
+    # detP is saved and freed before qcReport, which does not need it but does
+    # build a full MethylSet and beta matrix of its own.
+    step(paste0("Saving ", array, " results to disk"))
+    rgset_path <- file.path(array_qc_dir, paste0(array, "_rgSet.rds"))
+    detp_path  <- file.path(array_qc_dir, paste0(array, "_detP.rds"))
+
+    # compress = FALSE: gzip costs ~70 s here to save ~150 MB, and it is read
+    # back within the same analysis.
+    message("Saving detP to disk: ", detp_path)
+    saveRDS(detP, file = detp_path, compress = FALSE)
+
+    write_qc_summary(array, detP, rgSet, array_qc_dir)
+
+    rm(detP)
+    gc(full = TRUE)
+
+    message("Saving RGSet to disk: ", rgset_path)
+    saveRDS(rgSet, file = rgset_path, compress = FALSE)
+
+    # Last, with only rgSet live.
+    step(paste0("Building the ", array, " QC report"))
+    message("Generating QC report...")
+    minfi::qcReport(rgSet,
+                    sampNames  = rgSet$Sample_Name,
+                    sampGroups = rgSet$Sample_Group,
+                    pdf = file.path(array_qc_dir, paste0("2.0-QC_Report_", array, ".pdf")))
+
+    qc_results$rgsets[[array]] <- rgset_path
+    qc_results$detections[[array]] <- detp_path
+
+    rm(rgSet)
+    gc(full = TRUE)
     
     message("[qc] ", paste0("Completed ", array))
     message("Completed ", array, "\n")
@@ -834,37 +842,60 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir,
 }
 
 
+# Methods whose output for a sample depends only on that sample, so processing
+# them in passes is arithmetically the same as one call. Verified bit-identical
+# on 60 real EPIC samples, and it is the difference between finishing and being
+# OOM-killed: preprocessNoob on 220 EPIC samples in one call needs >22 GB.
+# minfi's noob uses dyeMethod = "single" by default, fitting background and dye
+# correction from each sample's own control probes.
+#
+# Deliberately NOT in this list:
+#   quantile, funnorm  pool information across samples -- chunking them really
+#                      would introduce a batch effect.
+#   illumina           normalizes against a reference sample index, and chunked
+#                      output differed (by ~2e-15, so probably just floating
+#                      point, but it is not exactly identical so it runs whole).
+M4A_PER_SAMPLE_NORM <- c("ssnoob", "raw")
+
 normalizeMeth <- function(rgSet, norm_method) {
-  batch_size <- 50
   method <- tolower(norm_method)
-  message("Normalizing using method: ", method)
-  
-  if (method == "ssnoob" && ncol(rgSet) > 50) {
-    message("More than 50 samples detected. Running ssNoob normalization in batches of ", batch_size, "...")
-    
-    n_samples <- ncol(rgSet)
-    batch_indices <- split(seq_len(n_samples), ceiling(seq_len(n_samples) / batch_size))
-    
-    mset_list <- lapply(seq_along(batch_indices), function(i) {
-      idx <- batch_indices[[i]]
-      message("  Processing batch ", i, "/", length(batch_indices),
-              " (samples ", idx[1], "-", idx[length(idx)], ")")
-      minfi::preprocessNoob(rgSet[, idx])
-    })
-    
-    message("Combining ", length(mset_list), " batches using combineArrays...")
-    combined <- do.call(minfi::combineArrays, mset_list)
-    return(combined)
+
+  run <- function(x) switch(method,
+    ssnoob   = minfi::preprocessNoob(x),
+    raw      = minfi::preprocessRaw(x),
+    illumina = minfi::preprocessIllumina(x),
+    quantile = minfi::preprocessQuantile(x),
+    funnorm  = minfi::preprocessFunnorm(x),
+    stop("Unknown normalization method: ", method,
+         "\nValid options are: ssnoob, raw, illumina, quantile, funnorm"))
+
+  n     <- ncol(rgSet)
+  chunk <- m4a_env_int("M4A_NORM_CHUNK", 48L)
+
+  if (!(method %in% M4A_PER_SAMPLE_NORM) || n <= chunk) {
+    message("Normalizing ", n, " samples in one call using method: ", method)
+    return(run(rgSet))
   }
-  
-  switch(method,
-         ssnoob    = minfi::preprocessNoob(rgSet),
-         raw       = minfi::preprocessRaw(rgSet),
-         illumina  = minfi::preprocessIllumina(rgSet),
-         quantile  = minfi::preprocessQuantile(rgSet),
-         funnorm   = minfi::preprocessFunnorm(rgSet),
-         stop("Unknown normalization method: ", method,
-              "\nValid options are: ssnoob, raw, illumina, quantile, funnorm"))
+
+  idx <- split(seq_len(n), ceiling(seq_len(n) / chunk))
+  message("Normalizing ", n, " samples using method: ", method,
+          " (", length(idx), " passes of up to ", chunk,
+          "; per-sample method, so the result is identical to one call)")
+
+  parts <- vector("list", length(idx))
+  for (i in seq_along(idx)) {
+    message("  pass ", i, "/", length(idx), " (samples ", idx[[i]][1], "-",
+            idx[[i]][length(idx[[i]])], ")")
+    parts[[i]] <- run(rgSet[, idx[[i]], drop = FALSE])
+    gc()
+  }
+
+  # BiocGenerics::cbind, not bare cbind: under the app's package stack something
+  # ahead of minfi takes the dispatch and it fails on bindCOLS.
+  out <- do.call(BiocGenerics::cbind, parts)
+  rm(parts)
+  gc(full = TRUE)
+  out
 }
 
 
@@ -885,29 +916,47 @@ normalizeMeth <- function(rgSet, norm_method) {
 #   )
 # }
 
-filterDetectionP <- function(rgSet, detP, mSetSq, threshold) {
+filterDetectionP <- function(detP, mSetSq, threshold) {
   detP <- detP[match(minfi::featureNames(mSetSq), rownames(detP)), ]
-  keep <- rowSums(detP < threshold) == ncol(rgSet)
-  
+
+  # Same test as rowSums(detP < threshold) == ncol, without materialising a
+  # full-size logical copy of detP.
+  keep <- matrixStats::rowMaxs(detP, na.rm = TRUE) < threshold
+
+  n_keep <- sum(keep)
   message("Detection p-value filter: ", threshold)
-  message("Probes failing: ", sum(!keep), " | Probes kept: ", sum(keep))
-  
+  message("Probes failing: ", length(keep) - n_keep, " | Probes kept: ", n_keep)
+
   mSetSq[keep, ]
 }
 
 
-filterProbes <- function(mSetSq, filter_dir) {
+# Static files, so read once per worker rather than once per array.
+.M4A_PROBE_BLACKLIST <- new.env(parent = emptyenv())
+
+probe_blacklist <- function(filter_dir) {
+  key <- filter_dir
+  hit <- get0(key, envir = .M4A_PROBE_BLACKLIST, inherits = FALSE)
+  if (!is.null(hit)) return(hit)
+
   readFilt <- function(fname) read.table(file.path(filter_dir, fname), header = FALSE)[, 1]
-  
-  amb <- readFilt("amb_3965probes.vh20151030.txt")
-  epic <- readFilt("epicV1B2_32260probes.vh20160325.txt")
-  snp <- readFilt("snp_7998probes.vh20151030.txt")
-  xy <- readFilt("xy_11551probes.vh20151030.txt")
-  
+  out <- unique(c(
+    readFilt("amb_3965probes.vh20151030.txt"),
+    readFilt("epicV1B2_32260probes.vh20160325.txt"),
+    readFilt("snp_7998probes.vh20151030.txt"),
+    readFilt("xy_11551probes.vh20151030.txt")
+  ))
+  assign(key, out, envir = .M4A_PROBE_BLACKLIST)
+  out
+}
+
+filterProbes <- function(mSetSq, filter_dir) {
+  blacklist <- probe_blacklist(filter_dir)
+
   rs <- grep("rs", rownames(mSetSq), value = TRUE)
   ch <- grep("ch", rownames(mSetSq), value = TRUE)
   
-  remove <- unique(c(amb, epic, snp, xy, rs, ch))
+  remove <- unique(c(blacklist, rs, ch))
   keep <- !rownames(mSetSq) %in% remove
   
   message("Filtering probes: removed ", sum(!keep), ", kept ", sum(keep))
@@ -1012,34 +1061,50 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
       panel.grid.minor.y = element_blank()
     )
   
+  # 0.3 in per sample so labels stay readable, but capped: ggplot2 refuses
+  # anything over 50 in, so any cohort above ~167 samples used to abort here.
+  plot_width <- min(40, max(10, n_samples * 0.3))
+
   # Save as PNG
   png_path <- file.path(out_dir, paste0("beta_boxplot_", array, ".png"))
-  ggplot2::ggsave(png_path, p, width = max(10, n_samples * 0.3), height = 6, dpi = 150)
+  ggplot2::ggsave(png_path, p, width = plot_width, height = 6, dpi = 150)
   message("  Saved boxplot to: ", png_path)
-  
+
   # Also save as PDF for better quality
   pdf_path <- file.path(out_dir, paste0("beta_boxplot_", array, ".pdf"))
-  ggplot2::ggsave(pdf_path, p, width = max(10, n_samples * 0.3), height = 6)
+  ggplot2::ggsave(pdf_path, p, width = plot_width, height = 6)
 }
 
 
+# mean_detP is passed in: the caller already computed it for the barplot and the
+# failure-rate CSV.
 generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
-                                 filter_dir, beta_dir) {
-  # Required for aggregate_to_probes()
+                                 filter_dir, beta_dir, mean_detP = NULL) {
+  # Supplies aggregate_to_probes() for finalizeBeta(). Attached here rather than
+  # in all_imports.R: it costs 2.5 GB resident, and only this step needs it.
   library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
 
   message("Processing array: ", array)
   array_beta_dir <- create_dir(file.path(beta_dir, array))
 
   ## --- 0. Exclude poor quality samples ---
-  keep <- colMeans(detP) < threshold
-  detP  <- detP[, keep]
-  rgSet <- rgSet[, keep]
+  if (is.null(mean_detP)) mean_detP <- matrixStats::colMeans2(detP)
+  keep <- mean_detP < threshold
+
+  # Subsetting copies both objects while the caller still holds the originals,
+  # so skip it when nothing is excluded.
+  if (!all(keep)) {
+    message("Excluding ", sum(!keep), " sample(s) above the detection-p threshold")
+    detP  <- detP[, keep, drop = FALSE]
+    rgSet <- rgSet[, keep, drop = FALSE]
+  }
   rm(keep)
 
   ## ---- 1. Normalization ----
   message("[beta] ", paste0("Normalizing ", array, " ..."))
   mSetSq <- normalizeMeth(rgSet, norm_method)
+  rm(rgSet)          # nothing downstream needs it
+  gc()
 
   ## ---- 2. Raw & normalized beta/M values ----
   # maybe use DelayedArray?
@@ -1050,12 +1115,26 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
 
   ## ---- 3. Detection p-value filtering ----
   message("[beta] ", "Detection p-value filtering...")
-  mSetSq <- filterDetectionP(rgSet, detP, mSetSq, threshold)
-  rm(rgSet, detP)
+  mSetSq <- filterDetectionP(detP, mSetSq, threshold)
+  rm(detP)
+  gc()
 
   ## ---- 4. Probe filtering ----
   message("[beta] ", "Probe filtering...")
   mSetSq_flt <- filterProbes(mSetSq, filter_dir)
+
+  # mSetSq is only kept in order to be written out. Doing that here rather than
+  # at the end of the function drops ~3 GB before the FFPE/finalizeBeta/boxplot
+  # stretch, which is where this stage peaks. Same files, written earlier.
+  mset_path <- file.path(array_beta_dir, paste0("002_unfilteredData_", array, ".rds"))
+  message("Saving mSetSq to: ", mset_path)
+  saveRDS(mSetSq, file = mset_path, compress = FALSE)
+  # Sidecar with just the sample metadata: the CNV dropdowns need only this, and
+  # deserialising the whole MethylSet to read it blocked the app for tens of
+  # seconds every time a selector changed.
+  saveRDS(as.data.frame(minfi::pData(mSetSq)), file = mset_pdata_path(mset_path))
+  rm(mSetSq)
+  gc()
 
   ## ---- 5. FFPE / Frozen adjustment ----
   message("[beta] ", "FFPE/ Froxen adjustment...")
@@ -1063,6 +1142,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
   unmeth <- minfi::getUnmeth(mSetSq_flt)
   beta   <- adjustFFPE(meth, unmeth, mSetSq_flt$Tissue_Type)
   rm(meth, unmeth, mSetSq_flt)
+  gc()
 
   ## ---- 6. Array-specific handling ----
   # if (array == "EPIC_V2") {
@@ -1091,22 +1171,11 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
 
   ## ---- 10. Save outputs ----
   beta_path <- file.path(array_beta_dir, paste0("001_beta_", array, ".rds"))
-  mset_path <- file.path(array_beta_dir, paste0("002_unfilteredData_", array, ".rds"))
-  # mset_flt_path <- file.path(array_beta_dir, paste0("003_filteredData_", array, ".rds"))
 
   message("[beta] ", "Saving beta matrix...")
   message("Saving beta to: ", beta_path)
   saveRDS(beta, file = beta_path, compress = FALSE)
   rm(beta)
-
-  message("Saving mSetSq to: ", mset_path)
-  saveRDS(mSetSq, file = mset_path, compress = FALSE)
-
-  # Sidecar with just the sample metadata. The CNV dropdowns need only this, and
-  # deserialising the whole ~1.2 GB MethylSet to read it blocked the app for tens
-  # of seconds every time a selector changed.
-  saveRDS(as.data.frame(minfi::pData(mSetSq)), file = mset_pdata_path(mset_path))
-  rm(mSetSq)
   
   # message("Saving mSetSq_flt to: ", mset_flt_path)
   # saveRDS(mSetSq_flt, file = mset_flt_path, compress = FALSE)
@@ -1174,48 +1243,49 @@ merge_matrix <- function(x, y) {
 }
 
 
+# Combine the per-array beta matrices. intersect + cbind rather than
+# merge(by = "row.names"), which coerced to a data.frame -- so beta_merged.rds
+# changed class depending on how many arrays were in the run.
 merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
-  message("Merging beta matrices from disk...")
-  
-  # Load first beta matrix
-  message("Loading first beta matrix: ", basename(beta_paths[1]))
-  beta_merged <- readRDS(beta_paths[1])
-  message("  Size: ", format(object.size(beta_merged), units = "auto"))
-  
-  # Load and merge remaining matrices one by one
-  if (length(beta_paths) > 1) {
-    for (i in 2:length(beta_paths)) {
-      message("Loading beta matrix ", i, "/", length(beta_paths), ": ", basename(beta_paths[i]))
-      beta_next <- readRDS(beta_paths[i])
-      message("  Size: ", format(object.size(beta_next), units = "auto"))
-      
-      # Merge current with next
-      message("  Merging...")
-      beta_merged <- merge(beta_merged, beta_next, by = "row.names")
-      
-      # Clean up
-      rownames(beta_merged) <- beta_merged[, 1]
-      beta_merged[, 1] <- NULL
-      
-      rm(beta_next)
-      
-      message("  Merged size: ", format(object.size(beta_merged), units = "auto"))
+  out_path <- file.path(beta_merge_dir, "beta_merged.rds")
+
+  # One array: the per-array file already is the merged matrix.
+  if (length(beta_paths) == 1L) {
+    message("Single array - copying ", basename(beta_paths[1]), " to beta_merged.rds")
+    if (!file.copy(beta_paths[1], out_path, overwrite = TRUE)) {
+      stop("Could not write ", out_path)
     }
+    write_beta_meta(out_path)
+    return(invisible(out_path))
   }
-  
-  # Save merged result
-  message("Saving merged beta matrix...")
+
+  message("Merging ", length(beta_paths), " beta matrices from disk...")
+  mats <- lapply(beta_paths, function(pth) {
+    message("  Loading ", basename(pth))
+    as.matrix(readRDS(pth))
+  })
+
+  common <- Reduce(intersect, lapply(mats, rownames))
+  if (length(common) == 0L) {
+    stop("The arrays in this run share no probes, so they cannot be merged.")
+  }
+  message("  Probes in common across arrays: ", length(common))
+
+  mats <- lapply(mats, function(m) m[common, , drop = FALSE])
+  beta_merged <- do.call(cbind, mats)
+  rm(mats)
+  gc()
+
+  message("Saving merged beta matrix: ", nrow(beta_merged), " probes x ",
+          ncol(beta_merged), " samples")
   # compress = FALSE for the same reason as detP: this is the artifact every
   # analysis worker reads, so save and load speed beat disk footprint.
-  saveRDS(beta_merged, file = file.path(beta_merge_dir, "beta_merged.rds"),
-          compress = FALSE)
+  saveRDS(beta_merged, file = out_path, compress = FALSE)
   # The CSV export is written on demand by the download handler instead of here:
   # it costs ~0.9 GB per analysis and most runs never download it.
-  
-  cat("\nMerged BetaMatrix completed at", Sys.time(), "\n")
-  cat("Final size: ", format(object.size(beta_merged), units = "auto"), "\n")
-  
-  return(beta_merged)
+  write_beta_meta(out_path, beta_merged)
+
+  invisible(out_path)
 }
 
 
@@ -1224,10 +1294,8 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
 # Returns paths and small values only -- the matrix stays on disk.
 extract_beta_and_targets <- function(input_dir, beta_dir, zip_paths = NULL){
 
-  # Unzipping happens here rather than in the caller: a beta-matrix archive is
-  # large enough that doing it in the shared app process stalls every other
-  # session. archive_extract takes one archive at a time, but the fileInput
-  # accepts several, so loop rather than silently dropping all but the first.
+  # Unzipped here rather than in the app process, which would stall every other
+  # session. One archive at a time, but the fileInput accepts several.
   if (length(zip_paths) > 0) {
     for (i in seq_along(zip_paths)) {
       m4a_progress(i - 1L, length(zip_paths) + 3L,
@@ -1336,7 +1404,9 @@ extract_beta_and_targets <- function(input_dir, beta_dir, zip_paths = NULL){
   # Analysis workers load the beta matrix from disk rather than receiving it over
   # the process boundary, so both ingest paths must leave an .rds behind (the
   # IDAT path already writes one in merge_beta_matrix_from_disk).
-  saveRDS(beta, file.path(merged_dir, "beta_merged.rds"), compress = FALSE)
+  beta_out <- file.path(merged_dir, "beta_merged.rds")
+  saveRDS(beta, beta_out, compress = FALSE)
+  write_beta_meta(beta_out, beta)
 
   m4a_progress(2, 3, "Reading the sample sheet")
   message("[beta] Reading sample sheet")
@@ -1414,7 +1484,16 @@ run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_d
 
   m4a_progress(1, total, "Reading the sample sheet")
   message("[qc] Loading sample sheet")
-  parse_samplesheets(input_dir, preprocessing_dir)
+  # The raw upload is deleted below, so a retry after a failed QC finds an empty
+  # input dir. That is fine as long as the per-array sheets it would have written
+  # are already there.
+  have_sheets <- any(vapply(get_array_types(), function(a)
+    file.exists(file.path(preprocessing_dir, a, "SampleSheet.csv")), logical(1)))
+  tryCatch(parse_samplesheets(input_dir, preprocessing_dir),
+           error = function(e) {
+             if (!have_sheets) stop(e)
+             message("[qc] Reusing the sample sheets from the previous attempt")
+           })
 
   # Free the raw upload before the memory-hungry part starts. recursive = TRUE
   # matters: without it unlink() silently refuses to remove a directory.
@@ -1457,8 +1536,14 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
     rgSet <- readRDS(qc_results$rgsets[[array]])
     detP  <- readRDS(qc_results$detections[[array]])
 
-    # Per-sample failure rate at the chosen threshold
-    failed_perc <- colSums(detP > thr) / nrow(detP) * 100
+    # Computed once and reused by the barplot and generate_beta_matrix.
+    mean_detP   <- matrixStats::colMeans2(detP, na.rm = TRUE)
+    names(mean_detP) <- colnames(detP)
+    failed_perc <- vapply(seq_len(ncol(detP)),
+                          function(j) sum(detP[, j] > thr, na.rm = TRUE),
+                          numeric(1)) / nrow(detP) * 100
+    names(failed_perc) <- colnames(detP)
+
     write.csv(
       failed_perc,
       file = file.path(array_qc_dir,
@@ -1468,13 +1553,15 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
     )
 
     p <- generate_detection_p_barplot(array = array, rgSet = rgSet,
-                                      detP = detP, threshold = thr)
+                                      detP = detP, threshold = thr,
+                                      mean_detP = mean_detP)
     ggplot2::ggsave(
       filename = file.path(array_qc_dir,
                            sprintf("1.0-Detection_P_barplot_threshold_%.2f_%s.png", thr, array)),
       plot = p, width = 12, height = 6, dpi = 300
     )
     rm(p, failed_perc)
+    gc()
 
     message("[beta] Generating beta matrix for ", array)
     result_paths <- generate_beta_matrix(
@@ -1484,13 +1571,14 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
       norm_method = norm_method,
       threshold   = thr,
       filter_dir  = filter_dir,
-      beta_dir    = beta_dir
+      beta_dir    = beta_dir,
+      mean_detP   = mean_detP
     )
 
     beta_paths <- c(beta_paths, result_paths$beta_path)
     mset_paths[[array]] <- result_paths$mset_path
 
-    rm(rgSet, detP)
+    rm(rgSet, detP, mean_detP)
     gc()
   }
 

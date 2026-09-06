@@ -441,9 +441,7 @@ load_data_server <- function(id, DIRS, cfg) {
       }
     })
     
-    # Put the upload screen back to a clean state. Shared by the synchronous
-    # failure path below and by the worker-error observers, so a failure looks
-    # the same however far into the ingest it happened.
+    # Shared by the synchronous failure path and the worker-error observers.
     reset_upload <- function(msg) {
       if (!is.null(DIRS$input) && dir.exists(DIRS$input)) {
         tryCatch({
@@ -556,7 +554,9 @@ load_data_server <- function(id, DIRS, cfg) {
     # IDAT upload: unzip, organise and classify. Minutes of disk work on a real
     # dataset, so it runs in a worker and the views switch when it reports back.
     idat_ingest_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("run_idat_ingest", args, app_dir, session_dir = DIRS$analysis)
+      # heavy = FALSE: unzipping and sorting files needs no Bioconductor.
+      m4a_submit("run_idat_ingest", args, app_dir, session_dir = DIRS$analysis,
+                 heavy = FALSE)
     })
 
     observeEvent(idat_ingest_task$status(), {
@@ -614,6 +614,22 @@ load_data_server <- function(id, DIRS, cfg) {
     })
 
     observeEvent(input$run_qc, {
+      # Refuse up front rather than being OOM-killed twenty minutes in.
+      sel <- input$idat_table_rows_selected
+      df  <- samples_df()
+      chosen <- if (length(sel)) df[sel, , drop = FALSE] else df
+      widest <- if (nrow(chosen) == 0) "EPIC" else
+        names(sort(table(chosen$Array_Type), decreasing = TRUE))[1]
+      tryCatch(
+        m4a_check_memory(nrow(chosen), widest, what = "Quality control"),
+        error = function(e) {
+          shinyjs::hide("ld_loading_view")
+          shinyjs::show("ld_idats_view")
+          alert_message(list(type = "error", text = conditionMessage(e)))
+          req(FALSE)
+        }
+      )
+
       shinyjs::hide("ld_idats_view")
       shinyjs::show("ld_loading_view")
 
@@ -715,121 +731,80 @@ load_data_server <- function(id, DIRS, cfg) {
     
     # --- QC TABS VIEW LOGIC (Load on demand) ---
     # Create reactive values to store loaded data for each array
-    loaded_qc_data <- reactiveValues()
-    
-    observe({
-      req(qc_results(), array_names())
-      
-      # Observe tab changes
-      observeEvent(input$qc_threshold_tabset, {
-        current_array <- input$qc_threshold_tabset
-        req(current_array)
-        
-        # Check if this array's data is already loaded
-        if (is.null(loaded_qc_data[[current_array]])) {
-          message("Loading ", current_array, " data from disk...")
-          notification_id <- showNotification(paste0("Loading ", current_array, " data from disk..."), type = "message", duration = 0)
-          
-          # Load from disk
-          rgset_path <- qc_results()$rgsets[[current_array]]
-          detp_path <- qc_results()$detections[[current_array]]
-          
-          full_rgSet <- readRDS(rgset_path)
-          full_detP <- readRDS(detp_path)
-          
-          # Calculate mean detection p-values for all samples
-          mean_detP <- colMeans(full_detP, na.rm = TRUE)
-          
-          # Get indices of top 100 samples with highest mean detection p-values
-          top_n <- min(100, ncol(full_detP))
-          top_indices <- order(mean_detP, decreasing = TRUE)[1:top_n]
-          
-          # Subset both objects to only keep the top 50 samples
-          rgSet_subset <- full_rgSet[, top_indices]
-          detP_subset <- full_detP[, top_indices]
-          
-          # Store ONLY the subsetted data in reactiveValues
-          loaded_qc_data[[current_array]] <- list(
-            rgSet = rgSet_subset,
-            detP = detP_subset,
-            total_samples = ncol(full_rgSet),  # Store total count for reference
-            kept_samples = top_n
-          )
-          
-          # Clean up full objects to free memory immediately
-          rm(full_rgSet, full_detP, mean_detP)
-          gc()
-          
-          removeNotification(notification_id)
-          showNotification("Data loaded", type = "message", duration = 2)
-          message("Loaded and subsetted ", current_array, " - RGSet size: ", 
-                  format(object.size(loaded_qc_data[[current_array]]$rgSet), units = "auto"),
-                  " (kept ", top_n, " of ", loaded_qc_data[[current_array]]$total_samples, " samples)")
+    # QC review screen. Reads the per-array summary sidecar the worker wrote
+    # during QC; it used to readRDS the full RGChannelSet and detP (~3.5 GB) into
+    # the shared app process on every tab click.
+    qc_summaries <- reactiveValues()
+
+    qc_summary_for <- function(array) {
+      if (is.null(qc_summaries[[array]])) {
+        rgset_path <- qc_results()$rgsets[[array]]
+        req(rgset_path)
+        qc_summaries[[array]] <- read_qc_summary(dirname(rgset_path), array)
+      }
+      qc_summaries[[array]]
+    }
+
+    # Registered once per session: this used to be nested inside an observe(),
+    # so every invalidation added another copy of it.
+    observeEvent(input$qc_threshold_tabset, {
+      current_array <- input$qc_threshold_tabset
+      req(current_array, qc_results())
+
+      summary <- qc_summary_for(current_array)
+      if (is.null(summary)) {
+        showNotification(
+          paste0("No QC summary found for ", current_array,
+                 ". Re-run QC to regenerate it."),
+          type = "warning", duration = 6
+        )
+        return()
+      }
+
+      plot_id <- paste0("ld_qc_barplot_", current_array)
+      output[[plot_id]] <- renderPlot({
+        thr_id <- paste0("ld_qc_threshold_", current_array)
+        req(input[[thr_id]])
+        generate_detection_p_barplot_summary(
+          array     = current_array,
+          summary   = summary,
+          threshold = as.numeric(input[[thr_id]])
+        )
+      }, res = 110)
+
+      stats_id <- paste0("ld_qc_stats_", current_array)
+      output[[stats_id]] <- renderUI({
+        thr_id <- paste0("ld_qc_threshold_", current_array)
+        req(input[[thr_id]])
+        thr <- as.numeric(input[[thr_id]])
+
+        # Precomputed during QC, so changing the radio button is a lookup.
+        col <- match(format(thr), colnames(summary$failed_counts))
+        failed_perc <- if (is.na(col)) {
+          rep(NA_real_, length(summary$samples))
+        } else {
+          summary$failed_counts[, col] / summary$n_probes * 100
         }
-        
-        # Get the data for current array
-        current_data <- loaded_qc_data[[current_array]]
-        
-        # Plot output
-        plot_id <- paste0("ld_qc_barplot_", current_array)
-        output[[plot_id]] <- renderPlot({
-          thr_id <- paste0("ld_qc_threshold_", current_array)
-          req(input[[thr_id]], current_data$rgSet, current_data$detP)
-          
-          thr <- as.numeric(input[[thr_id]])
-          
-          generate_detection_p_barplot_subset(
-            array     = current_array,
-            rgSet     = current_data$rgSet,
-            detP      = current_data$detP,
-            threshold = thr,
-            total_samples = current_data$total_samples,
-            kept_samples = current_data$kept_samples
+        keep <- summary$mean_detP < thr
+
+        tagList(
+          div(
+            class = "border rounded p-3 bg-light",
+            h5("QC summary"),
+            p(strong("Threshold: "), thr),
+            p(strong("Mean failed probes (%): "),
+              sprintf("%.2f", mean(failed_perc, na.rm = TRUE))),
+            p(strong("Max failed probes (%): "),
+              sprintf("%.2f", max(failed_perc, na.rm = TRUE))),
+            p(strong("Samples failing QC: "), sum(!keep), " / ", length(keep)),
+            hr(),
+            p(em(sprintf("%d samples on this array.", length(summary$samples))))
           )
-        })
-        
-        # Stats output
-        stats_id <- paste0("ld_qc_stats_", current_array)
-        output[[stats_id]] <- renderUI({
-          thr_id <- paste0("ld_qc_threshold_", current_array)
-          req(input[[thr_id]], current_data$detP)
-          
-          thr <- as.numeric(input[[thr_id]])
-          
-          failed_perc <- colSums(current_data$detP > thr) / nrow(current_data$detP) * 100
-          keep <- colMeans(current_data$detP) < thr
-          
-          tagList(
-            div(
-              class = "border rounded p-3 bg-light",
-              
-              h5("QC summary"),
-              
-              p(strong("Threshold: "), thr),
-              p(
-                strong("Mean failed probes (%): "),
-                sprintf("%.2f", mean(failed_perc))
-              ),
-              p(
-                strong("Max failed probes (%): "),
-                sprintf("%.2f", max(failed_perc))
-              ),
-              p(
-                strong("Samples failing QC (in top 100): "),
-                sum(!keep), " / ", length(keep)
-              ),
-              hr(),
-              p(
-                em(sprintf("Showing top %d samples with highest mean detection p-values (out of %d total samples)", 
-                           current_data$kept_samples, current_data$total_samples))
-              )
-            )
-          )  
-        })
+        )
       })
     })
-    
-    
+
+
     # --- QC CONTINUE ---
     # Beta-matrix generation: the last long blocking stage (15-40 min) and, like
     # QC, one that runs on every IDAT analysis. The worker reads the RGChannelSets
@@ -839,10 +814,25 @@ load_data_server <- function(id, DIRS, cfg) {
     })
 
     observeEvent(input$qc_continue, {
+      arrays <- array_names()
+
+      # This stage peaks higher than QC: rgSet and MethylSet are live together.
+      n_total <- sum(vapply(arrays, function(a) {
+        s <- qc_summaries[[a]]
+        if (is.null(s)) 0L else length(s$samples)
+      }, integer(1)))
+      if (n_total > 0) {
+        tryCatch(
+          m4a_check_memory(n_total, arrays[1], what = "Beta-matrix generation"),
+          error = function(e) {
+            alert_message(list(type = "error", text = conditionMessage(e)))
+            req(FALSE)
+          }
+        )
+      }
+
       shinyjs::hide("ld_qc_view")
       shinyjs::show("ld_loading_view")
-
-      arrays <- array_names()
 
       # Snapshot the per-array thresholds now: ExtendedTask must not read inputs.
       thresholds <- setNames(

@@ -48,6 +48,7 @@ services:
     volumes:
       - ./shiny/logs:/var/log/shiny-server
       - ./shiny/app/data:/srv/shiny-server/data
+    mem_limit: ${M4A_MEM_LIMIT:-12g}
     environment:
       - R_CONFIG_ACTIVE=default
       # Per instance. Keep MAX_JOBS * THREADS_PER_JOB within one instance's share

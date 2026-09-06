@@ -1629,6 +1629,12 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # stayed hidden only because the old eventReactive consuming it was lazy.
     run_analysis_trigger <- reactiveVal(0)
 
+    # BED path and the two rendered plot paths. Declarations were dropped in
+    # 4396dec while the twelve uses were left behind, breaking every CNV plot.
+    cnv_bed_path      <- reactiveVal(NULL)
+    cached_pileup_png <- reactiveVal(NULL)
+    cached_sample_png <- reactiveVal(NULL)
+
     # Dynamic Export Buttons based on active tab
     observeEvent(input$cnv_bed_file, {
       req(input$cnv_bed_file)
