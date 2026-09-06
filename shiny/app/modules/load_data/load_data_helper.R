@@ -181,16 +181,27 @@ parse_idat_files <- function(input_dir, preprocessing_dir) {
   # Create idats folder
   idats_dir <- create_dir(file.path(preprocessing_dir, "idats"))
   
-  # Copy and decompress if needed
-  for (idat_file in idat_files) {
+  n <- length(idat_files)
+  m4a_progress(0, n, paste0("Organising ", n, " IDAT files"))
+
+  # Move (don't copy) and decompress if needed. The extracted upload and the
+  # working directory are on the same volume, so file.rename is a metadata
+  # operation while file.copy rewrites every byte -- ~1.8 GB of pointless I/O
+  # for a 70-sample EPIC run, and it left the raw copy behind as well.
+  # file.copy is kept as the fallback for the cross-device case, where rename
+  # fails rather than doing the copy itself.
+  for (i in seq_len(n)) {
+    idat_file <- idat_files[i]
     if (grepl("\\.gz$", idat_file, ignore.case = TRUE)) {
       # Decompress .idat.gz
       output_file <- file.path(idats_dir, sub("\\.gz$", "", basename(idat_file), ignore.case = TRUE))
       R.utils::gunzip(idat_file, destname = output_file, overwrite = TRUE, remove = FALSE)
     } else {
-      # Copy uncompressed .idat
-      file.copy(idat_file, file.path(idats_dir, basename(idat_file)), overwrite = TRUE)
+      dest <- file.path(idats_dir, basename(idat_file))
+      moved <- suppressWarnings(file.rename(idat_file, dest))
+      if (!moved) file.copy(idat_file, dest, overwrite = TRUE)
     }
+    if (i %% 20 == 0 || i == n) m4a_progress(i, n, "Organising IDAT files")
   }
   return(idats_dir)
 }
@@ -554,7 +565,10 @@ generate_detection_p_barplot <- function(array, rgSet, detP, threshold) {
 }
 
 
-load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
+# progress_base / progress_total let the caller fold this function's steps into
+# one continuous bar instead of restarting it at 0 half way through a long run.
+load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir,
+                                          progress_base = 0L, progress_total = NULL) {
   batch_size = 110
   array_types <- get_array_types()
   arrays_used <- c()
@@ -581,6 +595,17 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
     stop("No arrays found to process")
   }
   
+  # Four reported steps per array: read, detection p-values, QC report, save.
+  steps_per_array <- 4L
+  if (is.null(progress_total)) {
+    progress_total <- progress_base + steps_per_array * length(arrays_used)
+  }
+  done <- progress_base
+  step <- function(detail) {
+    m4a_progress(done, progress_total, detail)
+    done <<- done + 1L
+  }
+
   # Initialize results
   qc_results <- list(
     rgsets = list(),
@@ -617,9 +642,10 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       
       # Calculate number of batches
       n_batches <- ceiling(n_samples / batch_size)
-      message("[qc] ", paste0("Processing batch ", batch_idx, "/", n_batches))
       message("Processing in ", n_batches, " batches")
       
+      step(paste0("Reading ", array, " IDATs in ", n_batches, " batches"))
+
       # Create directory for batch files
       batch_dir <- create_dir(file.path(array_qc_dir, "batches"))
       batch_paths <- c()
@@ -636,12 +662,17 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
         batch_targets <- targets[start_idx:end_idx, ]
         
         # Load RGSet for this batch only
+        # extended = FALSE: the extended set carries GreenSD/RedSD/NBeads on top
+        # of the two colour channels, so it is ~2.5x the I/O, the RAM and the
+        # saved .rds. Nothing downstream reads them (detectionP, qcReport and
+        # every preprocess* method take a plain RGChannelSet), so they are pure
+        # cost. Beta values are unaffected.
         batch_rgSet <- minfi::read.metharray.exp(
           base = array_prep_dir, 
           targets = batch_targets, 
           verbose = FALSE, 
           force = TRUE, 
-          extended = TRUE
+          extended = FALSE
         )
         message("  Batch RGSet size: ", format(object.size(batch_rgSet), units = "auto"))
         
@@ -697,12 +728,14 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       message("Final RGSet size: ", format(object.size(rgSet), units = "auto"))
       
       # Step 3: Calculate detection p-values on the merged RGSet
+      step(paste0("Calculating detection p-values for ", array))
       message("[qc] ", "Calculating detection p-values...")
       message("Calculating detection p-values on merged dataset...")
       detP <- minfi::detectionP(rgSet)
       message("detP size: ", format(object.size(detP), units = "auto"))
       
       # Step 4: Generate QC report
+      step(paste0("Building the ", array, " QC report"))
       message("Generating QC report...")
       minfi::qcReport(rgSet, 
                       sampNames = rgSet$Sample_Name, 
@@ -713,11 +746,14 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       rgset_path <- file.path(array_qc_dir, paste0(array, "_rgSet.rds"))
       detp_path <- file.path(array_qc_dir, paste0(array, "_detP.rds"))
       
+      step(paste0("Saving ", array, " results to disk"))
       message("Saving final RGSet to disk: ", rgset_path)
       saveRDS(rgSet, file = rgset_path, compress = FALSE)
       
       message("Saving final detP to disk: ", detp_path)
-      saveRDS(detP, file = detp_path, compress = TRUE)
+      # compress = FALSE: gzipping a 70-sample detP takes over a minute of pure
+      # CPU to save ~150 MB, and it is read back within the same analysis.
+      saveRDS(detP, file = detp_path, compress = FALSE)
       
       # Step 6: Optionally delete batch files to save space
       message("Cleaning up batch files...")
@@ -731,15 +767,17 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       
     } else {
       # Original processing for small datasets (<= batch_size samples or EPIC_V2)
+      step(paste0("Reading ", n_samples, " ", array, " samples"))
       message("[qc] ", paste0("Small dataset (", n_samples, " samples). Loading all at once..."))
       message("Small dataset (", n_samples, " samples). Loading all at once...")
       
+      # See the note on the batch path: the extended assays are never read.
       rgSet <- minfi::read.metharray.exp(
         base = array_prep_dir, 
         targets = targets, 
         verbose = TRUE, 
         force = TRUE, 
-        extended = TRUE
+        extended = FALSE
       )
       
       message("RGSet size: ", format(object.size(rgSet), units = "auto"))
@@ -753,11 +791,13 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       rgSet@colData@listData[index] <- lapply(rgSet@colData@listData[index], as.factor)
       
       # Calculate detection p-values
+      step(paste0("Calculating detection p-values for ", array))
       message("Calculating detection p-values...")
       detP <- minfi::detectionP(rgSet)
       message("detP size: ", format(object.size(detP), units = "auto"))
       
       # Generate QC report
+      step(paste0("Building the ", array, " QC report"))
       message("Generating QC report...")
       minfi::qcReport(rgSet, 
                       sampNames = rgSet$Sample_Name, 
@@ -768,11 +808,13 @@ load_qc_data_for_arrays_batch <- function(preprocessing_dir, qc_dir) {
       rgset_path <- file.path(array_qc_dir, paste0(array, "_rgSet.rds"))
       detp_path <- file.path(array_qc_dir, paste0(array, "_detP.rds"))
       
+      step(paste0("Saving ", array, " results to disk"))
       message("Saving RGSet to disk: ", rgset_path)
       saveRDS(rgSet, file = rgset_path, compress = FALSE)
       
       message("Saving detP to disk: ", detp_path)
-      saveRDS(detP, file = detp_path, compress = TRUE)
+      # See the note on the batch path: compression here is not worth the minute.
+      saveRDS(detP, file = detp_path, compress = FALSE)
       
       qc_results$rgsets[[array]] <- rgset_path
       qc_results$detections[[array]] <- detp_path
@@ -1163,7 +1205,10 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
   
   # Save merged result
   message("Saving merged beta matrix...")
-  saveRDS(beta_merged, file = file.path(beta_merge_dir, "beta_merged.rds"))
+  # compress = FALSE for the same reason as detP: this is the artifact every
+  # analysis worker reads, so save and load speed beat disk footprint.
+  saveRDS(beta_merged, file = file.path(beta_merge_dir, "beta_merged.rds"),
+          compress = FALSE)
   # The CSV export is written on demand by the download handler instead of here:
   # it costs ~0.9 GB per analysis and most runs never download it.
   
@@ -1177,8 +1222,22 @@ merge_beta_matrix_from_disk <- function(beta_paths, beta_merge_dir) {
 # Runs in a worker: reading a full beta-matrix CSV is minutes of work on a large
 # EPIC dataset and used to block every other user's session.
 # Returns paths and small values only -- the matrix stays on disk.
-extract_beta_and_targets <- function(input_dir, beta_dir){
-  
+extract_beta_and_targets <- function(input_dir, beta_dir, zip_paths = NULL){
+
+  # Unzipping happens here rather than in the caller: a beta-matrix archive is
+  # large enough that doing it in the shared app process stalls every other
+  # session. archive_extract takes one archive at a time, but the fileInput
+  # accepts several, so loop rather than silently dropping all but the first.
+  if (length(zip_paths) > 0) {
+    for (i in seq_along(zip_paths)) {
+      m4a_progress(i - 1L, length(zip_paths) + 3L,
+                   paste0("Extracting archive ", i, " of ", length(zip_paths)))
+      message("[beta-upload] Extracting ", basename(zip_paths[i]))
+      validate_archive(zip_paths[i])
+      archive::archive_extract(zip_paths[i], dir = input_dir)
+    }
+  }
+
   # Get all CSV files recursively from input directory
   all_files <- list.files(path = input_dir, pattern = "\\.csv$", 
                           recursive = TRUE, full.names = TRUE)
@@ -1277,7 +1336,7 @@ extract_beta_and_targets <- function(input_dir, beta_dir){
   # Analysis workers load the beta matrix from disk rather than receiving it over
   # the process boundary, so both ingest paths must leave an .rds behind (the
   # IDAT path already writes one in merge_beta_matrix_from_disk).
-  saveRDS(beta, file.path(merged_dir, "beta_merged.rds"))
+  saveRDS(beta, file.path(merged_dir, "beta_merged.rds"), compress = FALSE)
 
   m4a_progress(2, 3, "Reading the sample sheet")
   message("[beta] Reading sample sheet")
@@ -1294,6 +1353,44 @@ extract_beta_and_targets <- function(input_dir, beta_dir){
   ))
 }
 
+# Archive extraction + IDAT organisation, run as one worker job.
+#
+# This is the first thing that happens after an upload and it used to run inline
+# in the shared app process: unzipping several GB and then walking every IDAT
+# froze every other connected session for the duration. Nothing here needs the
+# session -- the uploaded archives are already on disk and the result is a small
+# samples table -- so it goes to the pool like every other long step.
+run_idat_ingest <- function(zip_paths, input_dir, preprocessing_dir) {
+  n_zip <- length(zip_paths)
+  for (i in seq_len(n_zip)) {
+    m4a_progress(i - 1L, n_zip + 2L,
+                 paste0("Extracting archive ", i, " of ", n_zip))
+    message("[ingest] Extracting ", basename(zip_paths[i]))
+    # Re-check inside the worker: the main process validated these before
+    # accepting them, but this function must be safe on its own.
+    validate_archive(zip_paths[i])
+    archive::archive_extract(zip_paths[i], dir = input_dir)
+  }
+
+  m4a_progress(n_zip, n_zip + 2L, "Organising IDAT files")
+  message("[ingest] Organising IDAT files")
+  idats_dir <- parse_idat_files(input_dir, preprocessing_dir)
+
+  m4a_progress(n_zip + 1L, n_zip + 2L, "Classifying by array type")
+  message("[ingest] Classifying by array type")
+  order_idat_per_array(idats_dir, preprocessing_dir)
+
+  message("[ingest] Building sample summary")
+  samples <- generate_idat_dataframe(preprocessing_dir)
+  if (nrow(samples) == 0) {
+    stop("No valid IDAT samples detected after classification")
+  }
+
+  m4a_progress(n_zip + 2L, n_zip + 2L, "Upload processed")
+  samples
+}
+
+
 # IDAT ingest + QC, run as one worker job.
 #
 # Everything here is file-driven: IDATs are already on disk and the RGChannelSets
@@ -1302,11 +1399,20 @@ extract_beta_and_targets <- function(input_dir, beta_dir){
 # step in the app and it runs on every IDAT analysis, so it is also the one that
 # matters most for keeping other users' sessions alive.
 run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_dir, qc_dir) {
-  m4a_progress(0, 3, "Separating unused IDATs")
+  # Count the arrays up front so the bar runs on one continuous scale instead of
+  # sitting at "2 of 3" for the twenty minutes the actual work takes.
+  n_arrays <- sum(vapply(get_array_types(), function(a) {
+    d <- file.path(preprocessing_dir, a)
+    dir.exists(d) &&
+      length(list.files(d, pattern = "\\.idat$", recursive = TRUE)) > 0
+  }, logical(1)))
+  total <- 2L + 4L * max(n_arrays, 1L) + 1L
+
+  m4a_progress(0, total, "Separating unused IDATs")
   message("[qc] Separating unused IDATs")
   separate_unselected_idats(samples_df, selected_idats, preprocessing_dir)
 
-  m4a_progress(1, 3, "Reading the sample sheet")
+  m4a_progress(1, total, "Reading the sample sheet")
   message("[qc] Loading sample sheet")
   parse_samplesheets(input_dir, preprocessing_dir)
 
@@ -1314,10 +1420,10 @@ run_qc_ingest <- function(samples_df, selected_idats, input_dir, preprocessing_d
   # matters: without it unlink() silently refuses to remove a directory.
   unlink(file.path(input_dir, "*"), recursive = TRUE, force = TRUE)
 
-  m4a_progress(2, 3, "Reading IDATs and building QC reports (the long step)")
-  res <- load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir)
+  res <- load_qc_data_for_arrays_batch(preprocessing_dir, qc_dir,
+                                       progress_base = 2L, progress_total = total)
 
-  m4a_progress(3, 3, "Quality control complete")
+  m4a_progress(total, total, "Quality control complete")
   res
 }
 

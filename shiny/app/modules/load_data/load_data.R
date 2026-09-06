@@ -441,6 +441,44 @@ load_data_server <- function(id, DIRS, cfg) {
       }
     })
     
+    # Put the upload screen back to a clean state. Shared by the synchronous
+    # failure path below and by the worker-error observers, so a failure looks
+    # the same however far into the ingest it happened.
+    reset_upload <- function(msg) {
+      if (!is.null(DIRS$input) && dir.exists(DIRS$input)) {
+        tryCatch({
+          unlink(file.path(DIRS$input, "*"), recursive = TRUE, force = TRUE)
+          message("DIRS$input cleaned successfully")
+        }, warning = function(w) {
+          message("Warning while cleaning DIRS$input: ", w$message)
+        }, error = function(e2) {
+          message("Failed to clean DIRS$input: ", e2$message)
+        })
+      }
+
+      shinyjs::hide("ld_loading_view")
+      shinyjs::hide("ld_idats_view")
+      shinyjs::hide("ld_qc_view")
+      shinyjs::show("ld_main_view")
+
+      type_selected(NULL)
+      shinyjs::removeClass("card_beta", "selected")
+      shinyjs::removeClass("card_idats", "selected")
+      shinyjs::hide("upload_section")
+
+      output$zipfile_ui <- renderUI({
+        fileInput(
+          inputId = ns("zipfile"),
+          label = "Upload your ZIP files",
+          accept = ".zip",
+          multiple = TRUE,
+          width = "280px"
+        )
+      })
+
+      alert_message(list(type = "error", text = msg))
+    }
+
     # --- FILE UPLOAD ---
     observeEvent(input$confirm_load, {
       # Show loading view
@@ -451,109 +489,50 @@ load_data_server <- function(id, DIRS, cfg) {
         # Fail fast on a full volume rather than part-way through a long run.
         m4a_check_disk(DIRS$data, upload_bytes = sum(input$zipfile$size))
 
-        notification_id <- showNotification("Extracting files from zip...", type="message", duration=0)
         zip_paths <- input$zipfile$datapath
-        # archive_extract takes one archive at a time, but the fileInput allows
-        # multiple, so extract them in a loop rather than silently dropping all
-        # but the first. Each is checked before extraction.
-        for (zp in zip_paths) {
-          validate_archive(zp)
-          archive::archive_extract(zp, dir = DIRS$input)
-        }
-        
+        # Validate here, in the request that accepted the upload, so a bad
+        # archive is rejected immediately instead of after a queue wait. The
+        # worker checks again on its own.
+        for (zp in zip_paths) validate_archive(zp)
+
+        queued <- m4a_queue_message()
+
         if (type_selected() == "IDATS") {
-          removeNotification(notification_id)
-          notification_id <- showNotification("Organizing IDAT files...", type="message", duration=0)
+          # Unzipping several GB and walking every IDAT is minutes of work, so it
+          # goes to a worker rather than running here and freezing every other
+          # connected session. Picked up by the idat_ingest_task observer below.
+          showNotification(
+            if (is.null(queued)) "Extracting and organizing IDAT files..." else queued,
+            type = "message", duration = 5
+          )
 
-          # Create idats folder and copy all IDATs there
-          idats_dir <- parse_idat_files(DIRS$input, DIRS$preprocessing)
-          
-          removeNotification(notification_id)
-          notification_id <- showNotification("Classifying by array type...", type="message", duration=0)
+          idat_ingest_task$invoke(
+            args = list(zip_paths        = zip_paths,
+                        input_dir        = DIRS$input,
+                        preprocessing_dir = DIRS$preprocessing),
+            app_dir = normalizePath(getwd())
+          )
 
-          # Now organize by array type
-          order_idat_per_array(idats_dir, DIRS$preprocessing)
-          
-          removeNotification(notification_id)
-          notification_id <- showNotification("Generating sample summary...", type="message", duration=0)
-
-          temp_df <- generate_idat_dataframe(DIRS$preprocessing)
-          
-          if (nrow(temp_df) == 0) {
-            stop("No valid IDAT samples detected after classification")
-          }
-          
-          samples_df(temp_df)
-          
-          removeNotification(notification_id)
-          notification_id <- showNotification("Complete!", type="message", duration=3)
-          
         } else if (type_selected() == "BETA") {
-          removeNotification(notification_id)
           # Reading a full beta-matrix CSV takes minutes on a real dataset, so it
           # goes to a worker like every other long step. The result is picked up
-          # by the observer on beta_task$status() below.
-          queued <- m4a_queue_message()
+          # by the observer on beta_upload_task$status() below. The worker does
+          # its own extraction, so the archives are handed over unopened.
           showNotification(
             if (is.null(queued)) "Reading the beta matrix..." else queued,
             type = "message", duration = 5
           )
 
           beta_upload_task$invoke(
-            args = list(input_dir = DIRS$input, beta_dir = DIRS$beta),
+            args = list(zip_paths = zip_paths,
+                        input_dir = DIRS$input, beta_dir = DIRS$beta),
             app_dir = normalizePath(getwd())
           )
         }
-        
-        # Only hide loading and show next view on success
-        if (type_selected() == "IDATS") {
-          shinyjs::hide("ld_loading_view")
-          shinyjs::show("ld_idats_view")
-        }
-        
+
       }, error = function(e) {
         message("Error during data loading: ", e$message)
-        
-        # Clean all files inside input
-        if (!is.null(DIRS$input) && dir.exists(DIRS$input)) {
-          tryCatch({
-            unlink(file.path(DIRS$input, "*"), recursive = TRUE, force = TRUE)
-            message("DIRS$input cleaned successfully")
-          }, warning = function(w) {
-            message("Warning while cleaning DIRS$input: ", w$message)
-          }, error = function(e2) {
-            message("Failed to clean DIRS$input: ", e2$message)
-          })
-        }
-        
-        # Reset UI to main view
-        shinyjs::hide("ld_loading_view")
-        shinyjs::hide("ld_idats_view")
-        shinyjs::hide("ld_qc_view")
-        shinyjs::show("ld_main_view")
-        
-        # Reset type selection
-        type_selected(NULL)
-        shinyjs::removeClass("card_beta", "selected")
-        shinyjs::removeClass("card_idats", "selected")
-        shinyjs::hide("upload_section")
-        
-        # Reset file input
-        output$zipfile_ui <- renderUI({
-          fileInput(
-            inputId = ns("zipfile"),
-            label = "Upload your ZIP files",
-            accept = ".zip",
-            multiple = TRUE,
-            width = "280px"
-          )
-        })
-        
-        # Show error message
-        alert_message(list(
-          type = "error",
-          text = paste("Processing failed:", e$message)
-        ))
+        reset_upload(paste("Processing failed:", e$message))
       })
     })
     
@@ -573,6 +552,28 @@ load_data_server <- function(id, DIRS, cfg) {
     
     
     output$download_log <- m4a_log_download_handler(DIRS$analysis, DIRS$analysis_id)
+
+    # IDAT upload: unzip, organise and classify. Minutes of disk work on a real
+    # dataset, so it runs in a worker and the views switch when it reports back.
+    idat_ingest_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_idat_ingest", args, app_dir, session_dir = DIRS$analysis)
+    })
+
+    observeEvent(idat_ingest_task$status(), {
+      status <- idat_ingest_task$status()
+
+      if (identical(status, "success")) {
+        samples_df(idat_ingest_task$result())
+        showNotification("Complete!", type = "message", duration = 3)
+        shinyjs::hide("ld_loading_view")
+        shinyjs::show("ld_idats_view")
+
+      } else if (identical(status, "error")) {
+        msg <- tryCatch({ idat_ingest_task$result(); "unknown error" },
+                        error = function(e) conditionMessage(e))
+        reset_upload(paste("Processing the IDAT upload failed:", msg))
+      }
+    })
 
     # Beta-matrix upload: the one long step on this path.
     beta_upload_task <- ExtendedTask$new(function(args, app_dir) {
@@ -599,10 +600,7 @@ load_data_server <- function(id, DIRS, cfg) {
       } else if (identical(status, "error")) {
         msg <- tryCatch({ beta_upload_task$result(); "unknown error" },
                         error = function(e) conditionMessage(e))
-        shinyjs::hide("ld_loading_view")
-        shinyjs::show("ld_main_view")
-        alert_message(list(type = "error",
-                           text = paste("Loading the beta matrix failed:", msg)))
+        reset_upload(paste("Loading the beta matrix failed:", msg))
       }
     })
 
@@ -636,7 +634,7 @@ load_data_server <- function(id, DIRS, cfg) {
 
     observe({
       running <- Filter(function(t) identical(t$status(), "running"),
-                        list(qc_task, beta_task, beta_upload_task))
+                        list(idat_ingest_task, qc_task, beta_task, beta_upload_task))
       req(length(running) > 0)
       m4a_render_progress(output, session, running[[1]], DIRS$analysis)
     })
