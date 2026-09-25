@@ -334,6 +334,32 @@ get_dmrs <- function(
   dmrs
 }
 
+# EPICv2 DMRs following the DMRcate EPICv2 vignette: cross-hybridising probes are
+# remapped and replicates averaged by cpg.annotate(), then DMRs are called on hg38.
+get_dmrs_dmrcate <- function(diff_met_data, out_dir) {
+  message("[diff] Computing DMRs with DMRcate")
+  beta <- as.matrix(diff_met_data$beta_diff)
+  # cpg.annotate() fits on M-values, which are infinite at beta 0 or 1.
+  beta <- beta[matrixStats::rowAlls(beta > 0 & beta < 1) %in% TRUE, , drop = FALSE]
+
+  annot <- DMRcate::cpg.annotate("array", beta, what = "Beta", arraytype = "EPICv2",
+                                 epicv2Remap = TRUE, epicv2Filter = "mean",
+                                 analysis.type = "differential",
+                                 design = diff_met_data$limma_desing, coef = 2)
+  if (!any(annot@ranges$is.sig)) return(data.frame())
+
+  ranges <- DMRcate::extractRanges(DMRcate::dmrcate(annot, lambda = 1000, C = 2),
+                                   genome = "hg38")
+  dmrs <- as.data.frame(ranges)
+  dmrs <- cbind(DMRs = paste0(dmrs$seqnames, ":", dmrs$start, "-", dmrs$end), dmrs)
+
+  if (nrow(dmrs) > 0) {
+    write.csv(dmrs, file.path(out_dir, paste0("dmrs_", Sys.Date(), ".csv")), row.names = FALSE)
+    openxlsx::write.xlsx(dmrs, file.path(out_dir, paste0("dmrs_", Sys.Date(), ".xlsx")))
+  }
+  dmrs
+}
+
 get_dmgs <- function(
   diff_met_data,
   lfc_cut,
@@ -444,9 +470,10 @@ run_differential_analysis <- function(
     comparison,
     with_champ,
     fdr_max,
+    with_dmrcate = FALSE,
     out_dir
 ) {
-  n_steps <- if (isTRUE(with_champ)) 7L else 6L
+  n_steps <- if (isTRUE(with_champ) || isTRUE(with_dmrcate)) 7L else 6L
   m4a_progress(0, n_steps, "Loading beta matrix and annotation")
   beta  <- readRDS(beta_path)
   cache <- setup_cache(
@@ -477,8 +504,12 @@ run_differential_analysis <- function(
 
   # ChAMP DMRs are opt-in and by far the slowest step.
   if (isTRUE(with_champ)) m4a_progress(5, n_steps, "Detecting DMRs with ChAMP (slow)")
+  if (isTRUE(with_dmrcate)) m4a_progress(5, n_steps, "Detecting DMRs with DMRcate (slow)")
   dmrs <- if (isTRUE(with_champ)) {
     tryCatch(get_dmrs(diff, TRUE, out_dir),
+             error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
+  } else if (isTRUE(with_dmrcate)) {
+    tryCatch(get_dmrs_dmrcate(diff, out_dir),
              error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
   } else {
     data.frame()
@@ -504,6 +535,7 @@ run_differential_analysis <- function(
     density_png      = density_png,
     comparison_label = diff$comparison_label,
     with_champ       = isTRUE(with_champ),
+    with_dmrcate     = isTRUE(with_dmrcate),
     n_baseline       = sum(diff$groups_factor == "Baseline"),
     n_comparison     = sum(diff$groups_factor == "Comparison")
   )

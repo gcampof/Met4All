@@ -41,6 +41,12 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       if (is_epicv2()) cfg$annotation_pkg_epicv2 else cfg$annotation_pkg
     })
 
+    # ChAMP only knows 450K/EPICv1, so EPICv2 gets DMRcate for DMRs instead.
+    observe({
+      shinyjs::toggle("diff_met_champ_opt", condition = !is_epicv2())
+      shinyjs::toggle("diff_met_dmrcate_opt", condition = is_epicv2())
+    })
+
     # Uploaded palettes live in this session's own directory, so one user's
     # upload does not turn up in every other user's dropdowns.
     session_palette_dir <- file.path(DIRS$analysis, "palettes")
@@ -1262,13 +1268,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         return()
       }
 
-      # ChAMP only knows 450K/EPICv1 probes.
-      if (is_epicv2() && isTRUE(input$diff_met_run_champ)) {
-        showNotification("ChAMP does not support EPICv2. Turn off 'Run ChAMP' to use limma.",
-                         type = "warning", duration = 8)
-        return()
-      }
-
       queued <- m4a_queue_message()
       showNotification(
         if (is.null(queued)) "Running differential methylation analysis..." else queued,
@@ -1289,7 +1288,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           comparison_col = input$diff_met_comparison_col,
           baseline       = input$diff_met_baseline,
           comparison     = input$diff_met_comparison,
-          with_champ     = isTRUE(input$diff_met_run_champ),
+          with_champ     = !is_epicv2() && isTRUE(input$diff_met_run_champ),
+          with_dmrcate   = is_epicv2() && isTRUE(input$diff_met_run_dmrcate),
           fdr_max        = DIFF_FDR_MAX,
           out_dir        = DIRS$differential
         ),
@@ -1638,8 +1638,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # DMR table
     output$diff_met_dmr_table <- DT::renderDataTable({
       res <- diff_result_or_message()
-      validate(need(isTRUE(res$with_champ),
-                    "DMRs can only be calculated when 'Run ChAMP' is activated."))
+      validate(need(isTRUE(res$with_champ) || isTRUE(res$with_dmrcate),
+                    paste0("DMRs can only be calculated when '",
+                           if (is_epicv2()) "Run DMRcate" else "Run ChAMP",
+                           "' is activated.")))
       make_dt(res$dmrs)
     })
 
