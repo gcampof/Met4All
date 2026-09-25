@@ -29,8 +29,6 @@ prepare_cnv_data <- function(
   m4a_progress(0, 5, "Loading methylation set")
   message("[cnv] Preparing CNV data...")
   
-  # Fixed values
-  genome = "hg19"
   mset_path <- mset_list[[array_type]]
   mset_object <- readRDS(mset_path)
   pd <- pData(mset_object)
@@ -44,6 +42,8 @@ prepare_cnv_data <- function(
   } else if (grepl("epic_v2", array_type)) {
     array_type <- "EPICv2"
   }
+  # conumee2 ships EPICv2 on hg38, matching its manifest; earlier arrays are hg19.
+  genome <- if (array_type == "EPICv2") "hg38" else "hg19"
   
   # Validate we have enough samples
   if (length(normal_ids) < 2) stop("Too few normal samples (need at least 2)")
