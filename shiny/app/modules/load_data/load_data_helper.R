@@ -929,10 +929,66 @@ adjustFFPE <- function(methy, unmethy, tissue_type) {
 }
 
 
-finalizeBeta <- function(beta) {
-  beta <- aggregate_to_probes(beta)
-  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = TRUE)
+finalizeBeta <- function(beta, array, arrays = array) {
+  if (array != "EPIC_V2") {
+    return(DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = TRUE))
+  }
+  solo <- length(arrays) == 1L
+  # Native EPICv2 IDs select DMRcate's EPICv2 (hg38) SNP, XY and cross-hybridisation
+  # lists. Cross-hybridising probes stay wherever cpg.annotate(epicv2Remap = TRUE) runs.
+  keep_ch <- solo || M4A_EPICV2_MERGE == "remap"
+  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = !keep_ch)
+  if (solo) return(beta)
+
+  target <- if ("EPIC" %in% arrays) "EPIC" else "450K"
+  beta <- switch(M4A_EPICV2_MERGE,
+                 manifest = epicv2_to_legacy_manifest(beta, target),
+                 remap    = epicv2_to_legacy_remap(beta, target))
+  message("EPICv2 mapped to ", nrow(beta), " ", target, " probe IDs (", M4A_EPICV2_MERGE, ")")
   beta
+}
+
+
+# ---- EPICv2 merged with 450K/EPICv1 -----------------------------------------
+# Two candidate strategies: "manifest" (A) or "remap" (B). Once one is chosen,
+# delete this constant and the other helper.
+M4A_EPICV2_MERGE <- "manifest"
+
+# EPICv1 or 450K ID of each EPICv2 probe, from the location matches of the
+# Peters et al. (2024) EPICv2manifest that DMRcate uses. NA if EPICv2-only.
+epicv2_legacy_ids <- function(probes, target) {
+  man <- AnnotationHub::AnnotationHub()[["AH116484"]]
+  ids <- man[probes, if (target == "EPIC") "EPICv1locmatch" else "K450locmatch"]
+  rm(man)
+  gc()
+  ids[!nzchar(ids)] <- NA
+  ids
+}
+
+# (A) Cross-hybridising probes already dropped: rename, then average replicates
+# (DMRcate's default epicv2Filter = "mean").
+epicv2_to_legacy_manifest <- function(beta, target) {
+  ids  <- epicv2_legacy_ids(rownames(beta), target)
+  keep <- !is.na(ids)
+  limma::avereps(beta[keep, , drop = FALSE], ID = ids[keep])
+}
+
+# (B) DMRcate's own remap and replicate filter, then hg38 CpG site to legacy ID.
+epicv2_to_legacy_remap <- function(beta, target) {
+  # cpg.annotate() works on M-values and its variability mode fails on non-finite ones.
+  beta  <- beta[matrixStats::rowAlls(beta > 0 & beta < 1) %in% TRUE, , drop = FALSE]
+  annot <- DMRcate::cpg.annotate("array", beta, what = "Beta", arraytype = "EPICv2",
+                                 epicv2Remap = TRUE, epicv2Filter = "mean",
+                                 analysis.type = "variability")
+  beta <- DMRcate::getCollapsedBetas(annot)   # one row per hg38 CpG, "chr:pos"
+  rm(annot)
+
+  loc <- minfi::getAnnotation("IlluminaHumanMethylationEPICv2anno.20a1.hg38", what = "Locations")
+  site_ids <- setNames(epicv2_legacy_ids(rownames(loc), target),
+                       paste(loc$chr, loc$pos, sep = ":"))
+  ids  <- site_ids[!is.na(site_ids)][rownames(beta)]
+  keep <- !is.na(ids)
+  limma::avereps(beta[keep, , drop = FALSE], ID = ids[keep])
 }
 
 
@@ -1016,10 +1072,8 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
 
 
 generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
-                                 filter_dir, beta_dir, mean_detP = NULL) {
-  # Supplies aggregate_to_probes() for finalizeBeta()
-  library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
-
+                                 filter_dir, beta_dir, mean_detP = NULL,
+                                 arrays = array) {
   message("Processing array: ", array)
   array_beta_dir <- create_dir(file.path(beta_dir, array))
 
@@ -1068,7 +1122,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
 
   ## ---- 5. Final SNP / XY / cross-hyb filtering ----
   message("[beta] ", "Final SNP/XY/cross-hyb filtering...")
-  beta <- finalizeBeta(beta)
+  beta <- finalizeBeta(beta, array, arrays)
 
   ## ---- 6. Beta Boxplots ---
   message("[beta] ", "Generating Beta boxplots...")
@@ -1435,7 +1489,8 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
       threshold   = thr,
       filter_dir  = filter_dir,
       beta_dir    = beta_dir,
-      mean_detP   = mean_detP
+      mean_detP   = mean_detP,
+      arrays      = arrays
     )
 
     beta_paths <- c(beta_paths, result_paths$beta_path)
