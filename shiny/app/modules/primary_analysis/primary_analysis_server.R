@@ -31,6 +31,16 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     beta_rds_path <- reactive({
       file.path(DIRS$beta, "merged", "beta_merged.rds")
     })
+
+    # EPICv2-only analyses keep native EPICv2 probe IDs (hg38); any merge is in
+    # EPICv1/450K IDs (hg19). Uploaded beta matrices are recognised by their IDs.
+    is_epicv2 <- reactive({
+      identical(unlist(array_names()), "EPIC_V2") || isTRUE(beta_merged()$epicv2)
+    })
+    annotation_pkg <- reactive({
+      if (is_epicv2()) cfg$annotation_pkg_epicv2 else cfg$annotation_pkg
+    })
+
     # Uploaded palettes live in this session's own directory, so one user's
     # upload does not turn up in every other user's dropdowns.
     session_palette_dir <- file.path(DIRS$analysis, "palettes")
@@ -1151,7 +1161,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           group1          = input$global_met_group1,
           group2          = input$global_met_group2,
           cache_dir       = DIRS$cache,
-          annotation_pkg  = cfg$annotation_pkg,
+          annotation_pkg  = annotation_pkg(),
           palette_dir     = palette_dirs(),
           palette_name    = input$global_met_color_palette
         ),
@@ -1252,6 +1262,13 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         return()
       }
 
+      # ChAMP only knows 450K/EPICv1 probes.
+      if (is_epicv2() && isTRUE(input$diff_met_run_champ)) {
+        showNotification("ChAMP does not support EPICv2. Turn off 'Run ChAMP' to use limma.",
+                         type = "warning", duration = 8)
+        return()
+      }
+
       queued <- m4a_queue_message()
       showNotification(
         if (is.null(queued)) "Running differential methylation analysis..." else queued,
@@ -1264,7 +1281,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           targets        = targets_merged(),
           cache_dir      = DIRS$cache,
           pathways_dir   = DIRS$pathways,
-          annotation_pkg = cfg$annotation_pkg,
+          annotation_pkg = annotation_pkg(),
           gene_set       = cfg$gene_set,
           palette_dir    = palette_dirs(),
           palette_name   = input$diff_met_color_palette,

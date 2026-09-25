@@ -13,8 +13,10 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
   annotation[annotation == " "] <- NA
   
   if (annot == "IlluminaHumanMethylationEPICanno.ilm10b2.hg19" | 
-      annot == "IlluminaHumanMethylationEPICanno.ilm10b4.hg19"){
-    aux <- annotation[, c(1:4, 22:24)]
+      annot == "IlluminaHumanMethylationEPICanno.ilm10b4.hg19" |
+      annot == "IlluminaHumanMethylationEPICv2anno.20a1.hg38"){
+    aux <- annotation[, c("chr", "pos", "strand", "Name",
+                          "UCSC_RefGene_Name", "UCSC_RefGene_Group")]
     aux.long.grp <- strsplit(aux$UCSC_RefGene_Group, ";")
     aux.long.gene <- strsplit(aux$UCSC_RefGene_Name, ";")
     stopifnot(all(sapply(aux.long.gene, length) ==
@@ -30,6 +32,10 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
     annotation$Group <- gsub("5'UTR|1stExon|TSS200", "Promoter200", annotation$UCSC_Group)
     annotation$Group <- gsub("TSS1500", "Promoter1500", annotation$Group)
     annotation$Group <- gsub("ExonBnd", "Body", annotation$Group)
+    # EPICv2 labels
+    annotation$Group <- gsub("^(5UTR|exon_1)$", "Promoter200", annotation$Group)
+    annotation$Group <- gsub("^exon_[0-9]+$", "Body", annotation$Group)
+    annotation$Group <- gsub("^3UTR$", "3'UTR", annotation$Group)
     annotation <- annotation[!duplicated(annotation), ]
     
     rm(aux, aux.long.gene, aux.long.grp, aux.len)
@@ -63,7 +69,7 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
       annotation <- annotation[order(annotation$UCSC_Gene), ]
       return(annotation)
     } else {
-      stop("Not implemented yet, only works with IlluminaHumanMethylationEPICanno.ilm10b2/4.hg19 or IlluminaHumanMethylation450kanno.ilmn12.hg19")
+      stop("Not implemented yet, only works with IlluminaHumanMethylationEPICanno.ilm10b2/4.hg19, IlluminaHumanMethylationEPICv2anno.20a1.hg38 or IlluminaHumanMethylation450kanno.ilmn12.hg19")
     }
   }
 }

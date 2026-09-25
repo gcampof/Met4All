@@ -8,6 +8,7 @@ library(IlluminaHumanMethylation450kmanifest)
 library(IlluminaHumanMethylationEPICmanifest)
 library(IlluminaHumanMethylationEPICv2manifest)
 library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
 
 # CNV
 library(conumee2)

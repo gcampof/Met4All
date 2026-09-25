@@ -90,12 +90,18 @@ beta_meta_path <- function(beta_path) {
   sub("\\.rds$", ".meta.rds", beta_path)
 }
 
+# EPICv2 probe IDs carry a strand/replicate suffix, e.g. cg00000029_TC21.
+is_epicv2_ids <- function(ids) {
+  any(grepl("^c[gh].*_[TB][CO][0-9]+$", head(ids, 1000)))
+}
+
 write_beta_meta <- function(beta_path, beta = NULL) {
   if (is.null(beta)) {
     beta <- tryCatch(readRDS(beta_path), error = function(e) NULL)
     if (is.null(beta)) return(invisible(NULL))
   }
-  meta <- list(samples = colnames(beta), n_probes = nrow(beta))
+  meta <- list(samples = colnames(beta), n_probes = nrow(beta),
+               epicv2 = is_epicv2_ids(rownames(beta)))
   tryCatch(saveRDS(meta, beta_meta_path(beta_path)), error = function(e) NULL)
   invisible(meta)
 }
@@ -109,7 +115,8 @@ beta_descriptor <- function(path, beta = NULL) {
       tryCatch(readRDS(beta_meta_path(path)), error = function(e) NULL)
     }
     if (!is.null(meta$samples)) {
-      return(list(path = path, samples = meta$samples, n_probes = meta$n_probes))
+      return(list(path = path, samples = meta$samples, n_probes = meta$n_probes,
+                  epicv2 = isTRUE(meta$epicv2)))
     }
     if (file.exists(path)) {
       beta <- tryCatch(readRDS(path), error = function(e) NULL)
@@ -119,7 +126,8 @@ beta_descriptor <- function(path, beta = NULL) {
   list(
     path     = path,
     samples  = if (!is.null(beta)) colnames(beta) else character(0),
-    n_probes = if (!is.null(beta)) nrow(beta) else NA_integer_
+    n_probes = if (!is.null(beta)) nrow(beta) else NA_integer_,
+    epicv2   = !is.null(beta) && is_epicv2_ids(rownames(beta))
   )
 }
 
