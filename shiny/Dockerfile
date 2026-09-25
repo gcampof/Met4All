@@ -33,15 +33,16 @@ RUN R -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org")
 RUN R -e 'BiocManager::install(version = "3.22", ask = FALSE)'
 
 # Install Bioconductor packages via pak
-RUN R -e 'pak::pkg_install(c("minfi", "patchwork", "bluster", "BiocNeighbors", "ComplexHeatmap", "ConsensusClusterPlus", "conumee", "IlluminaHumanMethylationEPICv2manifest", "limma", "ChAMP", "clusterProfiler", "sesame", "sesameData", "AnnotationDbi", "org.Hs.eg.db", "GO.db", "methylclock", "DMRcate", "DMRcatedata", "IlluminaHumanMethylation450kmanifest", "IlluminaHumanMethylationEPICmanifest", "IlluminaHumanMethylation450kanno.ilmn12.hg19", "IlluminaHumanMethylationEPICanno.ilm10b4.hg19", "matrixStats"))'
+RUN R -e 'pak::pkg_install(c("minfi", "patchwork", "bluster", "BiocNeighbors", "ComplexHeatmap", "ConsensusClusterPlus", "conumee", "IlluminaHumanMethylationEPICv2manifest", "limma", "ChAMP", "clusterProfiler", "sesame", "sesameData", "AnnotationDbi", "org.Hs.eg.db", "GO.db", "methylclock", "DMRcate", "DMRcatedata", "IlluminaHumanMethylation450kmanifest", "IlluminaHumanMethylationEPICmanifest", "IlluminaHumanMethylation450kanno.ilmn12.hg19", "IlluminaHumanMethylationEPICanno.ilm10b4.hg19", "IlluminaHumanMethylationEPICv2anno.20a1.hg38", "AnnotationHub", "matrixStats"))'
 
 # Install conumee2 from GitHub using devtools
 RUN R -e 'install.packages(c("remotes", "devtools"), repos = "https://cloud.r-project.org")'
 RUN R -e 'devtools::install_github("hovestadtlab/conumee2", subdir = "conumee2", dependencies = TRUE)'
 
-# Create ExperimentHub cache dir owned by shiny user
-RUN mkdir -p /home/shiny/.cache/R/ExperimentHub && \
-    chown -R shiny:shiny /home/shiny/.cache
+# Hub caches live next to the annotation cache, so the DMRcate resources
+# prefetched by build_cache.R need no download at runtime.
+ENV ANNOTATION_HUB_CACHE=/opt/met4all/hub/AnnotationHub \
+    EXPERIMENT_HUB_CACHE=/opt/met4all/hub/ExperimentHub
 
 # Bake the annotation cache outside every bind mount.
 # Narrow COPY so this layer is not invalidated by ordinary app edits.
