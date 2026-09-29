@@ -92,14 +92,15 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
                                    rm_mmap = FALSE){
   library(data.table)
   
-  group <- match.arg(group, choices = c("TSS200", "TSS1500", "Body", "BodyUTR"))
-  
+  group <- match.arg(group, choices = c("TSS200", "TSS1500", "Body", "BodyUTR", "All"))
+
   # Define grouping factors
   groupingfactor <- switch(group,
                            TSS200 = "Promoter200",
                            TSS1500 = c("Promoter200", "Promoter1500"),
                            Body = "Body",
-                           BodyUTR = c("Body", "3'UTR"))
+                           BodyUTR = c("Body", "3'UTR"),
+                           All = c("Promoter200", "Promoter1500", "Body", "3'UTR"))
   
   # Convert to data.table
   annot_dt <- as.data.table(annotation)
@@ -145,7 +146,14 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
   
   # Remove rows with all NA
   mat_clean <- mat_matrix[rowSums(is.na(mat_matrix)) != ncol(mat_matrix), ]
-  
+
+  # Probes per gene actually summarised here, for reporting alongside the gene
+  # level statistics: a median over 2 probes is not the same evidence as one
+  # over 20. Counted from the same merge, so it costs no extra annotation pass.
+  n_probes_dt <- unique(merged_dt[!is.na(UCSC_Gene), .(UCSC_Gene, Probe)])[, .N, by = UCSC_Gene]
+  n_probes <- setNames(n_probes_dt$N, n_probes_dt$UCSC_Gene)
+  attr(mat_clean, "n_probes") <- n_probes[rownames(mat_clean)]
+
   message(sprintf("Finished gene annotation: %d genes", nrow(mat_clean)))
   return(mat_clean)
 }
