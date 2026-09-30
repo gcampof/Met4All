@@ -16,7 +16,7 @@ This folder contains sample metadata and references for the test datasets. Two p
 Sample metadata is compiled in:
 
 ```text
-targets.csv
+GSE267015_targets.csv
 ```
 
 ### Beta Matrix Data
@@ -68,7 +68,7 @@ https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE240469
 Supplementary file:
 
 ```text
-GSE240469_RAW.tar
+GSE240469_EPICv2_processed.csv
 ```
 
 ### Citation
