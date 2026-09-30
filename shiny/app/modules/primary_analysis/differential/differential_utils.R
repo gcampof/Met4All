@@ -96,8 +96,10 @@ prepare_differential_methylation_data <- function(
   
   # Gene-level matrix for the chosen region (promoter by default).
   tss200 <- methylation_genemat_dt(beta2, built_annot, group = region)
-  # How many probes each gene's median is based on (attribute set by the line above).
+  # Reporting columns for the gene table (attributes set by the line above):
+  # how many probes each median is based on, and how far apart they lie.
   n_region_probes <- attr(tss200, "n_probes")
+  region_span_bp  <- attr(tss200, "span_bp")
   # tss200 <- methylation_genemat(beta2, built_annot)
   # NA filter for row names
   tss200 <- tss200[!is.na(rownames(tss200)), ]
@@ -106,10 +108,16 @@ prepare_differential_methylation_data <- function(
   groups <- trimws(as.character(targets2[[comparison_col]]))
   groups[groups == ""] <- NA
   
-  # NA filter 
+  # NA filter
+  # The gene matrix must be filtered with the same mask as the beta matrix: it
+  # was built from every sample, while `keep2` below is computed on the groups
+  # AFTER this filter. Left unfiltered, R recycles the shorter logical index and
+  # lmFit() fails with "row dimension of design doesn't match column dimension of
+  # data object" -- but only for sample sheets that have a blank or NA group.
   keep     <- !is.na(groups)
   targets2 <- targets2[keep, , drop = FALSE]
   beta2    <- beta2[, keep, drop = FALSE]
+  tss200   <- tss200[, keep, drop = FALSE]
   groups   <- groups[keep]
 
   # Recode groups in levels
@@ -133,8 +141,14 @@ prepare_differential_methylation_data <- function(
   # whether a gene-level logFC rests on one probe or on twenty.
   if (!is.null(n_region_probes) && nrow(toptab_gene_all) > 0) {
     gene_ids <- rownames(toptab_gene_all)
+    span <- if (is.null(region_span_bp)) {
+      rep(NA_integer_, length(gene_ids))
+    } else {
+      as.integer(unname(region_span_bp[gene_ids]))
+    }
     toptab_gene_all <- data.frame(
       `Probes in region` = as.integer(unname(n_region_probes[gene_ids])),
+      `Probe span (bp)` = span,
       toptab_gene_all,
       check.names = FALSE,
       stringsAsFactors = FALSE

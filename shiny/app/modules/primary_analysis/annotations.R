@@ -114,8 +114,9 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
     annot_dt[, n_groups := NULL]
   }
   
-  # Get unique probes per gene
-  probe_gene_map <- unique(annot_dt[, .(Name, UCSC_Gene)])
+  # Get unique probes per gene. Coordinates come along so the span of the region
+  # actually covered per gene can be reported next to the probe count.
+  probe_gene_map <- unique(annot_dt[, .(Name, UCSC_Gene, chr, pos)])
   
   # Convert beta matrix to data.table format
   beta_dt <- as.data.table(beta.matrix, keep.rownames = "Probe")
@@ -126,6 +127,11 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
   merged_dt <- probe_gene_map[beta_dt, on = c(Name = "Probe"), allow.cartesian = TRUE]
   setnames(merged_dt, "Name", "Probe")
   
+  # Per-probe table for the reporting columns, before the sample columns are
+  # melted away: one row per gene and probe, with its coordinate.
+  probe_info <- unique(merged_dt[!is.na(UCSC_Gene), .(UCSC_Gene, Probe, chr, pos)])
+  merged_dt[, c("chr", "pos") := NULL]
+
   # Melt to long format for efficient median calculation
   melted_dt <- data.table::melt(merged_dt, 
                                 id.vars = c("UCSC_Gene", "Probe"),
@@ -150,9 +156,19 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
   # Probes per gene actually summarised here, for reporting alongside the gene
   # level statistics: a median over 2 probes is not the same evidence as one
   # over 20. Counted from the same merge, so it costs no extra annotation pass.
-  n_probes_dt <- unique(merged_dt[!is.na(UCSC_Gene), .(UCSC_Gene, Probe)])[, .N, by = UCSC_Gene]
+  n_probes_dt <- probe_info[, .N, by = UCSC_Gene]
   n_probes <- setNames(n_probes_dt$N, n_probes_dt$UCSC_Gene)
   attr(mat_clean, "n_probes") <- n_probes[rownames(mat_clean)]
+
+  # How far apart those probes lie: first to last position, in base pairs. Two
+  # probes 40 bp apart and two probes 4 kb apart are not the same measurement,
+  # and the count alone cannot tell them apart. Computed per chromosome and
+  # maximised, so a gene annotated on more than one contig cannot produce a
+  # nonsensical span. A single probe gives 0.
+  span_dt <- probe_info[, .(span = max(pos) - min(pos)), by = .(UCSC_Gene, chr)][
+    , .(span = max(span)), by = UCSC_Gene]
+  span_bp <- setNames(as.integer(span_dt$span), span_dt$UCSC_Gene)
+  attr(mat_clean, "span_bp") <- span_bp[rownames(mat_clean)]
 
   message(sprintf("Finished gene annotation: %d genes", nrow(mat_clean)))
   return(mat_clean)

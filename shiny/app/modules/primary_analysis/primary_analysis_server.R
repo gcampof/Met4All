@@ -1705,9 +1705,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
                     c("every probe in the region", "gene median", "limma on genes",
                       "genes ranked by logFC", "FGSEA"),
                     paste("Every probe in the region is summarised to one median value per gene and",
-                          "limma is fitted on those values, so every gene keeps a score. Nothing is",
-                          "selected or discarded, so there is no probe-number bias to correct \u2014 and the",
-                          "FDR and logFC thresholds in the sidebar do not affect this result."),
+                          "limma is fitted on those values, so every gene keeps a score."),
                     !missmethyl)),
           div(class = "col-md-6",
               route("Significant CpGs", "missMethyl",
@@ -1847,8 +1845,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
             " This is the region of the last gene-set run, not necessarily the one selected there now."
           }),
         p(class = "m4a-route-body text-muted mb-0",
-          "\u0022Probes in region\u0022 is how many probes each gene\u0027s median is based on. ",
-          "The export contains every gene; the threshold below filters the view only.")
+          "\u0022Probes in region\u0022 is how many probes each gene\u0027s median is based on, and ",
+          "\u0022Probe span (bp)\u0022 is the distance from the first to the last of them \u2014 a lower ",
+          "bound on the region, not its annotated length. The export contains every gene; the ",
+          "threshold below filters the view only.")
       )
     })
 
