@@ -5,7 +5,7 @@ This folder contains sample metadata and references for the test datasets. Two p
 | Dataset | Array | Samples | Use |
 |---|---|---|---|
 | GSE267015 | EPIC (v1) | Retinoblastoma tumours | Default test dataset |
-| GSE240469 | EPIC v2.0 | Peripheral blood, healthy individuals | EPIC v2 testing |
+| GSE240469 | EPIC v2.0 | Prostate and Breast tumours | EPIC v2 testing |
 
 ---
 
