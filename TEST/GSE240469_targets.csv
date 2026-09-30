@@ -1,0 +1,41 @@
+Sample_Name,Sample_ID,Sentrix_ID,Sentrix_Position,Slide,Array,Tissue,Source,Sample_Type,Model,Treatment,DNA_input_ng,Replicate,Description,Basename
+PREC_500_1,GSM7698435,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,500,1,primary cell culture of prostate epithelial cells,GSM7698435_PREC_500_1
+PREC_250_1,GSM7698436,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,250,1,primary cell culture of prostate epithelial cells,GSM7698436_PREC_250_1
+PREC_125_1,GSM7698437,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,125,1,primary cell culture of prostate epithelial cells,GSM7698437_PREC_125_1
+LNCAP_500_1,GSM7698438,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,500,1,transformed prostate cancer cell line,GSM7698438_LNCAP_500_1
+LNCAP_250_1,GSM7698439,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,250,1,transformed prostate cancer cell line,GSM7698439_LNCAP_250_1
+LNCAP_125_1,GSM7698440,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,125,1,transformed prostate cancer cell line,GSM7698440_LNCAP_125_1
+SYN_12543,GSM7698441,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698441_SYN_12543
+SYN_10651,GSM7698442,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698442_SYN_10651
+PREC_500_2,GSM7698443,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,500,2,primary cell culture of prostate epithelial cells,GSM7698443_PREC_500_2
+PREC_250_2,GSM7698444,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,250,2,primary cell culture of prostate epithelial cells,GSM7698444_PREC_250_2
+PREC_125_2,GSM7698445,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,125,2,primary cell culture of prostate epithelial cells,GSM7698445_PREC_125_2
+LNCAP_500_2,GSM7698446,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,500,2,transformed prostate cancer cell line,GSM7698446_LNCAP_500_2
+LNCAP_250_2,GSM7698447,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,250,2,transformed prostate cancer cell line,GSM7698447_LNCAP_250_2
+LNCAP_125_2,GSM7698448,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,125,2,transformed prostate cancer cell line,GSM7698448_LNCAP_125_2
+SYN_5656,GSM7698449,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698449_SYN_5656
+SYN_16599,GSM7698450,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698450_SYN_16599
+MCF7,GSM7698451,,,,,Cell line,MCF7 cells,Breast cancer cell line,MCF7,none,,,MCF7 breast cancer cells,GSM7698451_MCF7_Cardiff_P7
+TAMR,GSM7698452,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,none,,,Tamoxifen-resistant MCF7,GSM7698452_TAMR_P8
+TAMR_Decitabine_Day7_1,GSM7698453,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Decitabine Day 7,,1,"Tamoxifen-resistant MCF7, Decitabine Day 7",GSM7698453_TAMR_Aza_Day7_R1
+TAMR_Control_2,GSM7698454,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Control,,2,"Tamoxifen-resistant MCF7, Control",GSM7698454_TAMR_NoAza_Day11_R2
+TAMR_Decitabine_Recovery_1,GSM7698455,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Decitabine Recovery Day 28,,1,"Tamoxifen-resistant MCF7, Decitabine Recovery Day 28",GSM7698455_TAMR_Aza_Day28_R1
+TAMR_Control_1,GSM7698456,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Control,,1,"Tamoxifen-resistant MCF7, Control",GSM7698456_TAMR_NoAza_Day11_R1
+TAMR_Decitabine_Recovery_2,GSM7698457,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Decitabine Recovery Day 28,,2,"Tamoxifen-resistant MCF7, Decitabine Recovery Day 28",GSM7698457_TAMR_Aza_Day28_R2
+TAMR_Decitabine_Day7_2,GSM7698458,,,,,Cell line,TAMR cells,Breast cancer cell line (tamoxifen-resistant),TAMR,Decitabine Day 7,,2,"Tamoxifen-resistant MCF7, Decitabine Day 7",GSM7698458_TAMR_Aza_Day7_R2
+PREC_500_3,GSM7698459,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,500,3,primary cell culture of prostate epithelial cells,GSM7698459_PREC_500_3
+PREC_250_3,GSM7698460,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,250,3,primary cell culture of prostate epithelial cells,GSM7698460_PREC_250_3
+PREC_125_3,GSM7698461,,,,,Cell line,PrEC cells,Normal prostate epithelial (primary culture),PrEC,none,125,3,primary cell culture of prostate epithelial cells,GSM7698461_PREC_125_3
+LNCAP_500_3,GSM7698462,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,500,3,transformed prostate cancer cell line,GSM7698462_LNCAP_500_3
+LNCAP_250_3,GSM7698463,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,250,3,transformed prostate cancer cell line,GSM7698463_LNCAP_250_3
+LNCAP_125_3,GSM7698464,,,,,Cell line,LNCaP cells,Prostate cancer cell line,LNCaP,none,125,3,transformed prostate cancer cell line,GSM7698464_LNCAP_125_3
+SYN_11452,GSM7698465,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698465_SYN-11452
+SYN_15917,GSM7698466,,,,,Prostate tumour,Prostate tumour,Primary prostate tumour,,none,,,prostate tumour,GSM7698466_SYN_15917
+HCI-005_Decitabine_1,GSM7698467,,,,,Breast cancer PDX model HCI-005,Breast tumour PDX,Breast cancer PDX,HCI-005,Decitabine,,1,human breast cancer patient derived xenografts,GSM7698467_FD07743210
+HCI-005_Decitabine_3,GSM7698468,,,,,Breast cancer PDX model HCI-005,Breast tumour PDX,Breast cancer PDX,HCI-005,Decitabine,,3,human breast cancer patient derived xenografts,GSM7698468_FD07745869
+HCI-005_Vehicle_1,GSM7698469,,,,,Breast cancer PDX model HCI-005,Breast tumour PDX,Breast cancer PDX,HCI-005,Vehicle,,1,human breast cancer patient derived xenografts,GSM7698469_FD07745961
+HCI-005_Vehicle_2,GSM7698470,,,,,Breast cancer PDX model HCI-005,Breast tumour PDX,Breast cancer PDX,HCI-005,Vehicle,,2,human breast cancer patient derived xenografts,GSM7698470_FD07745969
+Gar15-13_Decitabine_2,GSM7698471,,,,,Breast cancer PDX model Gar15-13,Breast tumour PDX,Breast cancer PDX,Gar15-13,Decitabine,,2,human breast cancer patient derived xenografts,GSM7698471_FD07746819
+Gar15-13_Vehicle_3,GSM7698472,,,,,Breast cancer PDX model Gar15-13,Breast tumour PDX,Breast cancer PDX,Gar15-13,Vehicle,,3,human breast cancer patient derived xenografts,GSM7698472_FD07746841
+Gar15-13_Vehicle_4,GSM7698473,,,,,Breast cancer PDX model Gar15-13,Breast tumour PDX,Breast cancer PDX,Gar15-13,Vehicle,,4,human breast cancer patient derived xenografts,GSM7698473_FD07746850
+Gar15-13_Decitabine_1,GSM7698474,,,,,Breast cancer PDX model Gar15-13,Breast tumour PDX,Breast cancer PDX,Gar15-13,Decitabine,,1,human breast cancer patient derived xenografts,GSM7698474_FD07747708
