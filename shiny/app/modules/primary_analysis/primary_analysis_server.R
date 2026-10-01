@@ -1688,7 +1688,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
 
       route <- function(title, subtitle, steps, body, active) {
         div(
-          class = paste("m4a-route", if (active) "m4a-route-on" else "m4a-route-off"),
+          class = paste("m4a-route m4a-route-equal",
+                        if (active) "m4a-route-on" else "m4a-route-off"),
           div(span(class = "m4a-route-title", title),
               span(class = "m4a-route-sub", " \u00b7 ", subtitle)),
           flow(steps),

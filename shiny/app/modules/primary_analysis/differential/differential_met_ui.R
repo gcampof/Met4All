@@ -211,7 +211,9 @@ differential_met_ui <- function(ns){
           br(),
           tags$style(HTML("
             .m4a-route { border: 1px solid var(--bs-border-color, #dee2e6); border-radius: .5rem;
-                         padding: .8rem .95rem; height: 100%; }
+                         padding: .8rem .95rem; }
+            /* Only the two side-by-side cards stretch to match each other. */
+            .m4a-route-equal { height: 100%; }
             .m4a-route-on  { border-color: #6f42c1; background: rgba(111,66,193,.05); }
             .m4a-route-off { opacity: .5; }
             .m4a-route-title { font-weight: 600; font-size: .95rem; }
