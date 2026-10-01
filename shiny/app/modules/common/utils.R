@@ -90,6 +90,35 @@ beta_meta_path <- function(beta_path) {
   sub("\\.rds$", ".meta.rds", beta_path)
 }
 
+# Readable text for anything a failed task hands back.
+# A task that fails inside the R code returns a condition, and conditionMessage()
+# is enough. A task whose WORKER dies -- killed for memory, daemon restarted --
+# comes back as a plain list from mirai ("19 | Connection reset"), and calling
+# conditionMessage() on it fails with "no applicable method", so the user sees
+# Shiny's generic error instead of what happened.
+m4a_error_text <- function(e) {
+  txt <- tryCatch({
+    if (inherits(e, "condition")) {
+      conditionMessage(e)
+    } else if (is.character(e)) {
+      paste(e, collapse = "\n")
+    } else if (is.list(e) && !is.null(e$message)) {
+      paste(as.character(e$message), collapse = "\n")
+    } else {
+      paste(utils::capture.output(print(unclass(e))), collapse = " ")
+    }
+  }, error = function(err) "")
+  txt <- trimws(paste(txt, collapse = " "))
+  if (!nzchar(txt)) txt <- "the analysis stopped without reporting a reason"
+  if (grepl("[Cc]onnection reset|unable to connect|daemon", txt)) {
+    txt <- paste0(txt, " -- the worker process stopped before finishing. This is ",
+                  "usually the system killing it for memory: try fewer samples, ",
+                  "set M4A_MAX_JOBS=1, or raise M4A_MEM_LIMIT.")
+  }
+  txt
+}
+
+
 # EPICv2 probe IDs carry a strand/replicate suffix, e.g. cg00000029_TC21.
 is_epicv2_ids <- function(ids) {
   any(grepl("^c[gh].*_[TB][CO][0-9]+$", head(ids, 1000)))
@@ -208,8 +237,8 @@ get_go_bp_gene_sets <- function() {
 # Process-level memo, shared by every Shiny session in this R process.
 # Lives in globalenv() so it survives Shiny re-sourcing app.R on mtime change
 # (routine under the dev bind mount); a file-scope env would be discarded.
-if (!exists(".M4A_CACHE_MEMO", envir = globalenv(), inherits = FALSE)) {
-  assign(".M4A_CACHE_MEMO", new.env(parent = emptyenv()), envir = globalenv())
+if (!base::exists(".M4A_CACHE_MEMO", envir = globalenv(), inherits = FALSE)) {
+  base::assign(".M4A_CACHE_MEMO", new.env(parent = emptyenv()), envir = globalenv())
 }
 
 # The only columns any consumer reads (global_met/global_utils.R). Keep at least
@@ -223,7 +252,10 @@ if (!exists(".M4A_CACHE_MEMO", envir = globalenv(), inherits = FALSE)) {
 # The returned objects are shared by reference across sessions — treat them as
 # read-only (in particular, never apply data.table `:=` to them).
 setup_cache <- function(DIRS, cfg) {
-  memo <- get(".M4A_CACHE_MEMO", envir = globalenv())
+  # base:: qualified: app.R attaches config, whose config::get() masks base::get.
+  # Unqualified, this fails with "unused argument (envir = globalenv())" whenever
+  # an analysis runs in the app process (the in-process fallback in m4a_submit).
+  memo <- base::get(".M4A_CACHE_MEMO", envir = globalenv())
   key  <- paste0(cfg$annotation_pkg, "@", DIRS$cache)
 
   hit <- get0(key, envir = memo, inherits = FALSE)

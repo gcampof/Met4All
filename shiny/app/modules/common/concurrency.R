@@ -75,13 +75,34 @@ m4a_memory_headroom_gb <- function() {
     suppressWarnings(as.numeric(v[1]))
   }
 
+  # Bytes of a named field in a cgroup memory.stat file, or NA.
+  cg_stat <- function(f, field) {
+    lines <- suppressWarnings(tryCatch(readLines(f, warn = FALSE),
+                                       error = function(e) character(0)))
+    hit <- grep(paste0("^", field, " "), lines, value = TRUE)
+    if (length(hit) == 0L) return(NA_real_)
+    suppressWarnings(as.numeric(sub(paste0("^", field, " "), "", hit[1])))
+  }
+
   # cgroup v2, then v1
-  for (pair in list(c("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
-                    c("/sys/fs/cgroup/memory/memory.limit_in_bytes",
-                      "/sys/fs/cgroup/memory/memory.usage_in_bytes"))) {
-    lim <- cg(pair[1]); use <- cg(pair[2])
+  for (spec in list(
+    list(max = "/sys/fs/cgroup/memory.max",
+         cur = "/sys/fs/cgroup/memory.current",
+         stat = "/sys/fs/cgroup/memory.stat", field = "inactive_file"),
+    list(max = "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+         cur = "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+         stat = "/sys/fs/cgroup/memory/memory.stat", field = "total_inactive_file"))) {
+    lim <- cg(spec$max); use <- cg(spec$cur)
     # An "unlimited" cgroup reports a huge sentinel; treat it as absent.
-    if (!is.na(lim) && !is.na(use) && lim < 2^62) return((lim - use) / 1024^3)
+    if (!is.na(lim) && !is.na(use) && lim < 2^62) {
+      # memory.current includes the page cache, which the kernel drops under
+      # pressure rather than failing an allocation. Counting it as used made a
+      # container that had merely READ a large file look full. Subtract the
+      # reclaimable part, as docker stats and kubernetes do for the working set.
+      cache <- cg_stat(spec$stat, spec$field)
+      if (!is.na(cache)) use <- max(use - cache, 0)
+      return((lim - use) / 1024^3)
+    }
   }
 
   tryCatch({
@@ -321,10 +342,15 @@ m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL,
 m4a_progress_path <- function(dir) file.path(dir, ".m4a_progress.rds")
 
 # Worker-side. Cheap enough to call between steps of a long analysis.
-m4a_progress <- function(value, total, detail = "") {
+# `check = FALSE` for steps that allocate nothing (saving a table, reporting
+# completion). Aborting there discards an analysis that has already succeeded,
+# which is the opposite of what the guard is for.
+m4a_progress <- function(value, total, detail = "", check = TRUE) {
   # Every stage boundary already calls this, which makes it the natural place to
   # check headroom. Raises, so it must sit outside the tryCatch below.
-  m4a_memory_checkpoint(if (nzchar(detail)) detail else "This analysis")
+  if (isTRUE(check)) {
+    m4a_memory_checkpoint(if (nzchar(detail)) detail else "This analysis")
+  }
 
   dir <- getOption("m4a.progress_dir")
   if (is.null(dir) || !nzchar(dir) || !dir.exists(dir)) return(invisible(NULL))

@@ -7,16 +7,17 @@ run_fgsea <- function(stats, pws) {
   
   # Scope the seed to this call. A bare set.seed() reseeds the RNG of the shared
   # R process, silently perturbing other users' UMAP and consensus clustering.
-  old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
-    get(".Random.seed", envir = globalenv(), inherits = FALSE)
+  # base:: qualified: config::get() masks base::get() in the app process.
+  old_seed <- if (base::exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+    base::get(".Random.seed", envir = globalenv(), inherits = FALSE)
   } else {
     NULL
   }
   on.exit({
     if (is.null(old_seed)) {
-      suppressWarnings(rm(".Random.seed", envir = globalenv()))
+      suppressWarnings(base::rm(".Random.seed", envir = globalenv()))
     } else {
-      assign(".Random.seed", old_seed, envir = globalenv())
+      base::assign(".Random.seed", old_seed, envir = globalenv())
     }
   }, add = TRUE)
 
@@ -31,6 +32,31 @@ run_fgsea <- function(stats, pws) {
   res <- res[order(res$pval), ]
   as.data.frame(res)
 }
+
+# GO ids are not readable on their own. Adds the term description next to the
+# id, from GO.db, and leaves the table untouched if anything is unavailable.
+add_go_terms <- function(df, id_col = "pathway") {
+  if (!is.data.frame(df) || nrow(df) == 0 || !id_col %in% names(df)) return(df)
+  ids <- as.character(df[[id_col]])
+  if (!any(grepl("^GO:", ids))) return(df)
+  terms <- tryCatch({
+    # mapIds() errors on any key GO.db does not know (obsolete ids happen), so
+    # ask only for the ones it has and leave the rest NA.
+    known <- ids %in% AnnotationDbi::keys(GO.db::GO.db, keytype = "GOID")
+    out   <- rep(NA_character_, length(ids))
+    if (any(known)) {
+      out[known] <- suppressMessages(AnnotationDbi::mapIds(
+        GO.db::GO.db, keys = ids[known], column = "TERM",
+        keytype = "GOID", multiVals = "first"))
+    }
+    out
+  }, error = function(e) { warning("Could not add GO terms: ", conditionMessage(e)); NULL })
+  if (is.null(terms)) return(df)
+  rest <- df[, setdiff(names(df), id_col), drop = FALSE]
+  data.frame(pathway = ids, TERM = unname(terms), rest,
+             stringsAsFactors = FALSE, check.names = FALSE)
+}
+
 
 # Clean up fgsea output
 tidy_fgsea <- function(df) {
@@ -47,8 +73,9 @@ prepare_differential_methylation_data <- function(
     built_annot,
     id_col,
     comparison_col,
-    baseline = NULL,      
-    comparison = NULL
+    baseline = NULL,
+    comparison = NULL,
+    region = "TSS200"
 ){
   if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
   if (length(comparison) == 0) stop("Please assign at least one level to Comparison")
@@ -67,8 +94,12 @@ prepare_differential_methylation_data <- function(
   keep_probes <- rownames(beta2) %in% built_annot$Name
   beta2 <- beta2[keep_probes, ]
   
-  # Get tss200 beta matrix annotatted
-  tss200 <- methylation_genemat_dt(beta2, built_annot)
+  # Gene-level matrix for the chosen region (promoter by default).
+  tss200 <- methylation_genemat_dt(beta2, built_annot, group = region)
+  # Reporting columns for the gene table (attributes set by the line above):
+  # how many probes each median is based on, and how far apart they lie.
+  n_region_probes <- attr(tss200, "n_probes")
+  region_span_bp  <- attr(tss200, "span_bp")
   # tss200 <- methylation_genemat(beta2, built_annot)
   # NA filter for row names
   tss200 <- tss200[!is.na(rownames(tss200)), ]
@@ -77,10 +108,16 @@ prepare_differential_methylation_data <- function(
   groups <- trimws(as.character(targets2[[comparison_col]]))
   groups[groups == ""] <- NA
   
-  # NA filter 
+  # NA filter
+  # The gene matrix must be filtered with the same mask as the beta matrix: it
+  # was built from every sample, while `keep2` below is computed on the groups
+  # AFTER this filter. Left unfiltered, R recycles the shorter logical index and
+  # lmFit() fails with "row dimension of design doesn't match column dimension of
+  # data object" -- but only for sample sheets that have a blank or NA group.
   keep     <- !is.na(groups)
   targets2 <- targets2[keep, , drop = FALSE]
   beta2    <- beta2[, keep, drop = FALSE]
+  tss200   <- tss200[, keep, drop = FALSE]
   groups   <- groups[keep]
 
   # Recode groups in levels
@@ -100,6 +137,24 @@ prepare_differential_methylation_data <- function(
   fit_tss  <- limma::lmFit(tss200_2, desing)
   fit2_tss <- limma::eBayes(fit_tss)
   toptab_gene_all <- limma::topTable(fit2_tss, adjust = "fdr", number = Inf, sort.by = "p")
+  # First column: the number of probes summarised per gene, so a reader can see
+  # whether a gene-level logFC rests on one probe or on twenty.
+  if (!is.null(n_region_probes) && nrow(toptab_gene_all) > 0) {
+    gene_ids <- rownames(toptab_gene_all)
+    span <- if (is.null(region_span_bp)) {
+      rep(NA_integer_, length(gene_ids))
+    } else {
+      as.integer(unname(region_span_bp[gene_ids]))
+    }
+    toptab_gene_all <- data.frame(
+      `Probes in region` = as.integer(unname(n_region_probes[gene_ids])),
+      `Probe span (bp)` = span,
+      toptab_gene_all,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+    rownames(toptab_gene_all) <- gene_ids
+  }
   
   # Build comparison label for plot titles
   comparison_label <- paste0(
@@ -413,6 +468,7 @@ get_fgsea <- function(
   
   if(selected_pathway == "gobp"){
     fgsea_out <- tidy_fgsea(run_fgsea(stats, pathways$go_bp))
+    fgsea_out <- add_go_terms(fgsea_out)
   } else if (selected_pathway == "kegg"){
     fgsea_out <- tidy_fgsea(run_fgsea(stats, pathways$kegg))
   } else if(selected_pathway == "hallmark"){
@@ -473,7 +529,9 @@ run_differential_analysis <- function(
     with_dmrcate = FALSE,
     out_dir
 ) {
-  n_steps <- if (isTRUE(with_champ) || isTRUE(with_dmrcate)) 7L else 6L
+  # Pathway enrichment is no longer part of this run: it is chosen and launched
+  # from the Gene-set enrichment tab, one region and one collection at a time.
+  n_steps <- if (isTRUE(with_champ) || isTRUE(with_dmrcate)) 6L else 5L
   m4a_progress(0, n_steps, "Loading beta matrix and annotation")
   beta  <- readRDS(beta_path)
   cache <- setup_cache(
@@ -492,19 +550,20 @@ run_differential_analysis <- function(
   dmps_all <- get_dmps(diff, fdr_cut = fdr_max, lfc_cut = 0,
                        with_champ = with_champ, out_dir = out_dir)
 
+  # Background for missMethyl: every CpG the DMP fit was run on.
+  all_cpg_path <- file.path(out_dir, "dmp_tested_cpgs.rds")
+  tryCatch(saveRDS(rownames(diff$beta_diff), all_cpg_path),
+           error = function(e) {
+             warning("Could not save the tested CpG list: ", conditionMessage(e))
+             all_cpg_path <<- NA_character_
+           })
+
   m4a_progress(3, n_steps, "Collecting differentially methylated genes")
   dmgs <- get_dmgs(diff, 0, out_dir)
 
-  m4a_progress(4, n_steps, "Running pathway enrichment (GO, KEGG, Hallmark)")
-  fgsea <- list(
-    gobp     = get_fgsea(diff, cache$pathways, "gobp", out_dir),
-    kegg     = get_fgsea(diff, cache$pathways, "kegg", out_dir),
-    hallmark = get_fgsea(diff, cache$pathways, "hallmark", out_dir)
-  )
-
   # ChAMP DMRs are opt-in and by far the slowest step.
-  if (isTRUE(with_champ)) m4a_progress(5, n_steps, "Detecting DMRs with ChAMP (slow)")
-  if (isTRUE(with_dmrcate)) m4a_progress(5, n_steps, "Detecting DMRs with DMRcate (slow)")
+  if (isTRUE(with_champ)) m4a_progress(4, n_steps, "Detecting DMRs with ChAMP (slow)")
+  if (isTRUE(with_dmrcate)) m4a_progress(4, n_steps, "Detecting DMRs with DMRcate (slow)")
   dmrs <- if (isTRUE(with_champ)) {
     tryCatch(get_dmrs(diff, TRUE, out_dir),
              error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
@@ -525,18 +584,172 @@ run_differential_analysis <- function(
     error = function(e) { warning("Density plot failed: ", conditionMessage(e)); NULL }
   )
 
-  m4a_progress(n_steps, n_steps, "Differential methylation complete")
+  m4a_progress(n_steps, n_steps, "Differential methylation complete", check = FALSE)
 
   list(
     dmps_all         = dmps_all,
+    all_cpg_path     = all_cpg_path,
     dmrs             = dmrs,
     dmgs             = dmgs,
-    fgsea            = fgsea,
     density_png      = density_png,
     comparison_label = diff$comparison_label,
     with_champ       = isTRUE(with_champ),
     with_dmrcate     = isTRUE(with_dmrcate),
     n_baseline       = sum(diff$groups_factor == "Baseline"),
     n_comparison     = sum(diff$groups_factor == "Comparison")
+  )
+}
+
+
+# ---- missMethyl gene-set testing --------------------------------------------
+# Complements the gene-level route above rather than replacing it. Met4All
+# summarises promoter probes to a gene median and runs limma on genes, so its
+# fgsea ranking has no CpG-selection step and no probe-number bias to correct.
+# missMethyl works the other way round: it takes the list of significant CpGs
+# and corrects, per gene set, for the fact that genes covered by more probes are
+# more likely to contain a significant one. Offering both means the whole gene
+# can be tested (not only the promoter), with that correction applied.
+
+# gsameth() works on Entrez IDs; the MSigDB GMTs we ship are gene symbols.
+symbols_to_entrez_sets <- function(gmt) {
+  syms <- unique(unlist(gmt, use.names = FALSE))
+  map  <- suppressMessages(AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db, keys = syms, column = "ENTREZID",
+    keytype = "SYMBOL", multiVals = "first"))
+  sets <- lapply(gmt, function(g) unique(unname(map[g][!is.na(map[g])])))
+  sets[lengths(sets) > 0]
+}
+
+# array_type: "450K", "EPIC" or "EPIC_V2", matching missMethyl's array.type.
+# EPICv2-only runs keep native (suffixed) EPICv2 IDs, which is exactly what
+# missMethyl's EPIC_V2 annotation is keyed by, so nothing has to be renamed.
+run_missmethyl_gst <- function(
+    sig_cpg,
+    all_cpg_path,
+    collection       = c("GO", "KEGG", "Hallmark"),
+    genomic_features = "ALL",
+    array_type       = c("EPIC", "450K", "EPIC_V2"),
+    sig_genes        = FALSE,
+    pathways_dir     = NULL,
+    hallmark_gmt     = NULL,
+    out_dir
+) {
+  collection <- match.arg(collection)
+  array_type <- match.arg(array_type)
+  if (!requireNamespace("missMethyl", quietly = TRUE)) {
+    stop("The missMethyl package is not installed in this image.")
+  }
+  if (is.na(all_cpg_path) || !file.exists(all_cpg_path)) {
+    stop("The tested-CpG list is missing; re-run the differential methylation analysis.")
+  }
+
+  all_cpg <- readRDS(all_cpg_path)
+  sig_cpg <- intersect(unique(as.character(sig_cpg)), all_cpg)
+  if (length(sig_cpg) < 10) {
+    stop("Only ", length(sig_cpg), " significant CpGs at the current thresholds; ",
+         "gene-set testing needs at least 10. Relax the FDR or logFC cut-off.")
+  }
+
+  m4a_progress(0, 2, paste0("Testing ", collection, " gene sets with missMethyl (",
+                            length(sig_cpg), " significant CpGs). GO has around 20,000 sets, ",
+                            "so this step takes a few minutes."))
+  res <- if (identical(collection, "Hallmark")) {
+    if (is.null(pathways_dir) || is.null(hallmark_gmt)) {
+      stop("The Hallmark gene-set file is not configured.")
+    }
+    sets <- symbols_to_entrez_sets(fgsea::gmtPathways(file.path(pathways_dir, hallmark_gmt)))
+    missMethyl::gsameth(sig.cpg = sig_cpg, all.cpg = all_cpg, collection = sets,
+                        array.type = array_type,
+                        genomic.features = genomic_features, sig.genes = sig_genes)
+  } else {
+    tryCatch(
+      missMethyl::gometh(sig.cpg = sig_cpg, all.cpg = all_cpg, collection = collection,
+                         array.type = array_type,
+                         genomic.features = genomic_features, sig.genes = sig_genes),
+      error = function(e) {
+        if (identical(collection, "KEGG")) {
+          stop("KEGG testing failed. KEGG pathway data may have to be fetched over the ",
+               "internet, which an offline deployment cannot do. Use GO or Hallmark ",
+               "instead. Original error: ", conditionMessage(e))
+        }
+        stop(e)
+      }
+    )
+  }
+
+  m4a_progress(1, 2, "Saving missMethyl results", check = FALSE)
+  res <- as.data.frame(res)
+  res <- cbind(ID = rownames(res), res)
+  rownames(res) <- NULL
+  if ("P.DE" %in% names(res)) res <- res[order(res$P.DE), , drop = FALSE]
+
+  stem <- paste0("missmethyl_", tolower(collection), "_", Sys.Date())
+  tryCatch({
+    write.csv(res, file.path(out_dir, paste0(stem, ".csv")), row.names = FALSE)
+    if (requireNamespace("openxlsx", quietly = TRUE)) {
+      openxlsx::write.xlsx(res, file.path(out_dir, paste0(stem, ".xlsx")), rowNames = FALSE)
+    }
+  }, error = function(e) warning("Could not save the missMethyl results: ", conditionMessage(e)))
+
+  m4a_progress(2, 2, "missMethyl complete", check = FALSE)
+  list(
+    table            = res,
+    collection       = collection,
+    genomic_features = genomic_features,
+    array_type       = array_type,
+    n_sig            = length(sig_cpg),
+    n_all            = length(all_cpg),
+    file_stem        = stem
+  )
+}
+
+
+# ---- Gene-set enrichment over all CpGs --------------------------------------
+# The gene-median route, run on demand for one region and one collection.
+# Summarises the region's probes to a gene median, fits limma on genes, and
+# ranks every gene by logFC for fgsea -- no CpG is selected, so there is no
+# probe-number bias to correct. Returns the gene table too: it is the same
+# object the DMGs tab shows, now tied to the region actually chosen.
+run_gene_set_fgsea <- function(
+    beta_path,
+    targets,
+    cache_dir,
+    pathways_dir,
+    annotation_pkg,
+    gene_set,
+    id_col,
+    comparison_col,
+    baseline,
+    comparison,
+    region     = "TSS200",
+    collection = "gobp",
+    out_dir
+) {
+  m4a_progress(0, 3, "Loading beta matrix and annotation")
+  beta  <- readRDS(beta_path)
+  cache <- setup_cache(
+    DIRS = list(cache = cache_dir, pathways = pathways_dir),
+    cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
+  )
+
+  m4a_progress(1, 3, paste0("Summarising probes to genes (", region, ")"))
+  diff <- prepare_differential_methylation_data(
+    beta, targets, cache$built_annot,
+    id_col, comparison_col, baseline, comparison,
+    region = region
+  )
+  rm(beta)
+  dmgs <- get_dmgs(diff, 0, out_dir)
+
+  m4a_progress(2, 3, paste0("Running FGSEA (", collection, ")"))
+  table <- get_fgsea(diff, cache$pathways, collection, out_dir)
+
+  m4a_progress(3, 3, "Gene-set analysis complete", check = FALSE)
+  list(
+    table      = table,
+    dmgs       = dmgs,
+    region     = region,
+    collection = collection,
+    n_genes    = nrow(diff$toptab_gene_all)
   )
 }

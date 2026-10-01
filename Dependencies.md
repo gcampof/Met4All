@@ -120,6 +120,7 @@ These are low-level C/C++ libraries required to compile certain R packages.
 | IlluminaHumanMethylation450kanno.ilmn12.hg19 | 450k annotation (hg19) |
 | IlluminaHumanMethylationEPICanno.ilm10b4.hg19 | EPIC annotation (hg19) |
 | IlluminaHumanMethylationEPICv2anno.20a1.hg38 | EPICv2 annotation (hg38) |
+| [missMethyl](https://bioconductor.org/packages/missMethyl/) | Gene-set testing on significant CpGs, corrected for probes per gene |
 
 ### Copy Number Variation
 | Package | Purpose |

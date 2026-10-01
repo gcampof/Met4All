@@ -181,6 +181,18 @@ differential_met_ui <- function(ns){
           title = tagList(icon("table"), " DMGs"),
           value = "dmgs",
           br(),
+          uiOutput(ns("dmg_source_note")),
+          div(
+            style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
+            p(class = "text-uppercase fw-bold mb-2",
+              style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
+              icon("filter", style = "font-size: 0.75rem;"), " Minimum |logFC| at gene level:"),
+            numericInput(ns("diff_met_dmg_lfc_cut"), label = NULL,
+                         value = 0, min = 0, max = 1, step = 0.01, width = "100%"),
+            p(class = "text-muted mb-0", style = "font-size: 0.72rem;",
+              "Gene values are medians over the region's probes, so their logFC is smaller ",
+              "than a single CpG's. This threshold is separate from the CpG one in the sidebar.")
+          ),
           div(
             class = "dt-container",
             style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
@@ -188,39 +200,78 @@ differential_met_ui <- function(ns){
           )
         ),
         
-        # FGSEA - GOBP Tab
+        # Gene-set enrichment: two methods over the same collections.
+        # FGSEA ranks every gene by its promoter-level logFC; missMethyl tests
+        # the significant CpGs, correcting for probes per gene. The methods
+        # answer different questions, so the choice is a control here rather
+        # than two separate tabs a reader might take for the same thing.
         tabPanel(
-          title = tagList(icon("dna"), " FGSEA \u2014 GOBP"),
-          value = "fgsea_gobp",
+          title = tagList(icon("dna"), " Gene-set enrichment"),
+          value = "enrichment",
           br(),
+          tags$style(HTML("
+            .m4a-route { border: 1px solid var(--bs-border-color, #dee2e6); border-radius: .5rem;
+                         padding: .8rem .95rem; }
+            /* Only the two side-by-side cards stretch to match each other. */
+            .m4a-route-equal { height: 100%; }
+            .m4a-route-on  { border-color: #6f42c1; background: rgba(111,66,193,.05); }
+            .m4a-route-off { opacity: .5; }
+            .m4a-route-title { font-weight: 600; font-size: .95rem; }
+            .m4a-route-sub { font-size: .8rem; color: var(--bs-secondary-color, #6c757d); }
+            .m4a-flow { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin: .55rem 0; }
+            .m4a-chip { font-size: .78rem; line-height: 1.5; padding: .1rem .55rem; border-radius: 999px;
+                        background: rgba(111,66,193,.12); white-space: nowrap; }
+            .m4a-route-off .m4a-chip { background: rgba(108,117,125,.15); }
+            .m4a-arrow { color: var(--bs-secondary-color, #6c757d); font-size: .8rem; }
+            .m4a-route-body { font-size: .86rem; line-height: 1.5; margin: 0; }
+            .m4a-foot { font-size: .84rem; font-style: italic; }
+            .m4a-gene { display: flex; gap: 2px; align-items: stretch; margin: .15rem 0 .35rem; }
+            .m4a-seg { flex-basis: 0; padding: .3rem .25rem; font-size: .72rem; text-align: center;
+                       border-radius: .25rem; background: rgba(108,117,125,.12);
+                       color: var(--bs-secondary-color, #6c757d); white-space: nowrap;
+                       overflow: hidden; text-overflow: ellipsis; }
+            .m4a-seg-on { background: rgba(111,66,193,.2); color: var(--bs-body-color, #212529);
+                          font-weight: 600; }
+            .m4a-ticks { display: flex; gap: 2px; font-size: .68rem;
+                         color: var(--bs-secondary-color, #6c757d); }
+            .m4a-tick { flex-basis: 0; }
+            .m4a-tick-tss { text-align: right; color: #6f42c1; font-weight: 600; }
+            @media (max-width: 575px) { .m4a-seg { font-size: .64rem; padding: .3rem .1rem; } }
+          ")),
+          div(
+            class = "d-flex flex-wrap gap-3 align-items-end mb-2",
+            selectInput(ns("enr_method"), "CpGs used:",
+                        choices = c("All CpGs \u2014 gene medians, FGSEA" = "fgsea",
+                                    "Significant CpGs \u2014 missMethyl" = "missmethyl"),
+                        selected = "fgsea", width = "290px"),
+            selectInput(ns("enr_region"), "Gene region:",
+                        choices = c("Promoter" = "promoter",
+                                    "Extended promoter" = "promoter1500",
+                                    "Gene body" = "body",
+                                    "Whole gene" = "all"),
+                        selected = "promoter", width = "190px"),
+            selectInput(ns("enr_collection"), "Gene sets:",
+                        choices = c("GO" = "gobp", "KEGG" = "kegg", "Hallmark" = "hallmark"),
+                        selected = "gobp", width = "150px"),
+            actionButton(ns("enr_run"), " Run gene-set analysis",
+                         class = "btn btn-outline-primary", icon = icon("play")),
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'missmethyl'", ns("enr_method")),
+              div(
+                class = "pb-2",
+                checkboxInput(ns("gst_sig_genes"),
+                              label = "List significant genes per set (slower)",
+                              value = FALSE, width = "260px")
+              )
+            )
+          ),
+          uiOutput(ns("enr_region_note")),
+          uiOutput(ns("enr_explainer")),
+          uiOutput(ns("gst_summary")),
           div(
             class = "dt-container",
-            style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
-            DT::dataTableOutput(ns("diff_met_fgsea_gobp_table"), height = "100%")
-          )
-        ),
-        
-        # FGSEA - KEGG Tab
-        tabPanel(
-          title = tagList(icon("dna"), " FGSEA \u2014 KEGG"),
-          value = "fgsea_kegg",
-          br(),
-          div(
-            class = "dt-container",
-            style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
-            DT::dataTableOutput(ns("diff_met_fgsea_kegg_table"), height = "100%")
-          )
-        ),
-        
-        # FGSEA - Hallmark Tab
-        tabPanel(
-          title = tagList(icon("dna"), " FGSEA \u2014 Hallmark"),
-          value = "fgsea_hallmark",
-          br(),
-          div(
-            class = "dt-container",
-            style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
-            DT::dataTableOutput(ns("diff_met_fgsea_hallmark_table"), height = "100%")
+            style = "width: 100%; height: calc(100vh - 470px); overflow: auto;",
+            DT::dataTableOutput(ns("diff_met_enrichment_table"), height = "100%")
           )
         )
       )
