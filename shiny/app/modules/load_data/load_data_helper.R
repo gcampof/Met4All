@@ -935,59 +935,28 @@ finalizeBeta <- function(beta, array, arrays = array) {
   }
   solo <- length(arrays) == 1L
   # Native EPICv2 IDs select DMRcate's EPICv2 (hg38) SNP, XY and cross-hybridisation
-  # lists. Cross-hybridising probes stay wherever cpg.annotate(epicv2Remap = TRUE) runs.
-  keep_ch <- solo || M4A_EPICV2_MERGE == "remap"
-  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = !keep_ch)
+  # lists. EPICv2-only runs keep cross-hybridising probes for DMRcate to remap when
+  # calling DMRs; merged runs drop them, as for the other arrays.
+  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = !solo)
   if (solo) return(beta)
 
   target <- if ("EPIC" %in% arrays) "EPIC" else "450K"
-  beta <- switch(M4A_EPICV2_MERGE,
-                 manifest = epicv2_to_legacy_manifest(beta, target),
-                 remap    = epicv2_to_legacy_remap(beta, target))
-  message("EPICv2 mapped to ", nrow(beta), " ", target, " probe IDs (", M4A_EPICV2_MERGE, ")")
+  beta <- epicv2_to_legacy(beta, target)
+  message("EPICv2 mapped to ", nrow(beta), " ", target, " probe IDs")
   beta
 }
 
 
-# ---- EPICv2 merged with 450K/EPICv1 -----------------------------------------
-# Two candidate strategies: "manifest" (A) or "remap" (B). Once one is chosen,
-# delete this constant and the other helper.
-M4A_EPICV2_MERGE <- "manifest"
-
-# EPICv1 or 450K ID of each EPICv2 probe, from the location matches of the
-# Peters et al. (2024) EPICv2manifest that DMRcate uses. NA if EPICv2-only.
-epicv2_legacy_ids <- function(probes, target) {
+# EPICv2 to EPICv1/450K probe IDs for merging, from the location matches of the
+# Peters et al. (2024) EPICv2manifest that DMRcate uses. Unmatched probes are
+# EPICv2-only CpGs and are dropped; replicates mapping to the same ID are averaged
+# (DMRcate's default epicv2Filter = "mean").
+epicv2_to_legacy <- function(beta, target) {
   man <- AnnotationHub::AnnotationHub()[["AH116484"]]
-  ids <- man[probes, if (target == "EPIC") "EPICv1locmatch" else "K450locmatch"]
+  ids <- man[rownames(beta), if (target == "EPIC") "EPICv1locmatch" else "K450locmatch"]
   rm(man)
   gc()
-  ids[!nzchar(ids)] <- NA
-  ids
-}
-
-# (A) Cross-hybridising probes already dropped: rename, then average replicates
-# (DMRcate's default epicv2Filter = "mean").
-epicv2_to_legacy_manifest <- function(beta, target) {
-  ids  <- epicv2_legacy_ids(rownames(beta), target)
-  keep <- !is.na(ids)
-  limma::avereps(beta[keep, , drop = FALSE], ID = ids[keep])
-}
-
-# (B) DMRcate's own remap and replicate filter, then hg38 CpG site to legacy ID.
-epicv2_to_legacy_remap <- function(beta, target) {
-  # cpg.annotate() works on M-values and its variability mode fails on non-finite ones.
-  beta  <- beta[matrixStats::rowAlls(beta > 0 & beta < 1) %in% TRUE, , drop = FALSE]
-  annot <- DMRcate::cpg.annotate("array", beta, what = "Beta", arraytype = "EPICv2",
-                                 epicv2Remap = TRUE, epicv2Filter = "mean",
-                                 analysis.type = "variability")
-  beta <- DMRcate::getCollapsedBetas(annot)   # one row per hg38 CpG, "chr:pos"
-  rm(annot)
-
-  loc <- minfi::getAnnotation("IlluminaHumanMethylationEPICv2anno.20a1.hg38", what = "Locations")
-  site_ids <- setNames(epicv2_legacy_ids(rownames(loc), target),
-                       paste(loc$chr, loc$pos, sep = ":"))
-  ids  <- site_ids[!is.na(site_ids)][rownames(beta)]
-  keep <- !is.na(ids)
+  keep <- !is.na(ids) & nzchar(ids)
   limma::avereps(beta[keep, , drop = FALSE], ID = ids[keep])
 }
 
