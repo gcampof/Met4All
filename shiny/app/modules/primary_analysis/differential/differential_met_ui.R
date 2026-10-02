@@ -251,7 +251,7 @@ differential_met_ui <- function(ns){
                                     "Whole gene" = "all"),
                         selected = "promoter", width = "190px"),
             selectInput(ns("enr_collection"), "Gene sets:",
-                        choices = c("GO" = "gobp", "KEGG" = "kegg", "Hallmark" = "hallmark"),
+                        choices = c("GO BP" = "gobp", "KEGG" = "kegg", "Hallmark" = "hallmark"),
                         selected = "gobp", width = "150px"),
             actionButton(ns("enr_run"), " Run gene-set analysis",
                          class = "btn btn-outline-primary", icon = icon("play")),

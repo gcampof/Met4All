@@ -620,18 +620,23 @@ symbols_to_entrez_sets <- function(gmt) {
   sets[lengths(sets) > 0]
 }
 
-# array_type: "450K", "EPIC" or "EPIC_V2", matching missMethyl's array.type.
-# EPICv2-only runs keep native (suffixed) EPICv2 IDs, which is exactly what
-# missMethyl's EPIC_V2 annotation is keyed by, so nothing has to be renamed.
+# array_type: "450K", "EPIC" or "EPIC_V2", matching missMethyl's array.type, or
+# "auto" for uploaded beta matrices whose array is unknown. EPICv2-only runs keep
+# native (suffixed) EPICv2 IDs, which is exactly what missMethyl's EPIC_V2
+# annotation is keyed by, so nothing has to be renamed.
+# The gene sets are FGSEA's own (setup_cache()$pathways), so both methods test the
+# same collections and nothing has to be fetched online.
 run_missmethyl_gst <- function(
     sig_cpg,
     all_cpg_path,
-    collection       = c("GO", "KEGG", "Hallmark"),
+    collection       = c("gobp", "kegg", "hallmark"),
     genomic_features = "ALL",
-    array_type       = c("EPIC", "450K", "EPIC_V2"),
+    array_type       = c("EPIC", "450K", "EPIC_V2", "auto"),
     sig_genes        = FALSE,
-    pathways_dir     = NULL,
-    hallmark_gmt     = NULL,
+    cache_dir,
+    pathways_dir,
+    annotation_pkg,
+    gene_set,
     out_dir
 ) {
   collection <- match.arg(collection)
@@ -650,40 +655,41 @@ run_missmethyl_gst <- function(
          "gene-set testing needs at least 10. Relax the FDR or logFC cut-off.")
   }
 
-  m4a_progress(0, 2, paste0("Testing ", collection, " gene sets with missMethyl (",
-                            length(sig_cpg), " significant CpGs). GO has around 20,000 sets, ",
-                            "so this step takes a few minutes."))
-  res <- if (identical(collection, "Hallmark")) {
-    if (is.null(pathways_dir) || is.null(hallmark_gmt)) {
-      stop("The Hallmark gene-set file is not configured.")
-    }
-    sets <- symbols_to_entrez_sets(fgsea::gmtPathways(file.path(pathways_dir, hallmark_gmt)))
-    missMethyl::gsameth(sig.cpg = sig_cpg, all.cpg = all_cpg, collection = sets,
-                        array.type = array_type,
-                        genomic.features = genomic_features, sig.genes = sig_genes)
-  } else {
-    tryCatch(
-      missMethyl::gometh(sig.cpg = sig_cpg, all.cpg = all_cpg, collection = collection,
-                         array.type = array_type,
-                         genomic.features = genomic_features, sig.genes = sig_genes),
-      error = function(e) {
-        if (identical(collection, "KEGG")) {
-          stop("KEGG testing failed. KEGG pathway data may have to be fetched over the ",
-               "internet, which an offline deployment cannot do. Use GO or Hallmark ",
-               "instead. Original error: ", conditionMessage(e))
-        }
-        stop(e)
-      }
-    )
+  # 450K data carry ~30k probes EPICv1 dropped, so a beta matrix that is not
+  # (almost) all EPICv1 probes is 450K.
+  if (identical(array_type, "auto")) {
+    epic <- rownames(minfi::getAnnotation(
+      IlluminaHumanMethylationEPICanno.ilm10b4.hg19::IlluminaHumanMethylationEPICanno.ilm10b4.hg19,
+      what = "Locations"))
+    array_type <- if (mean(all_cpg %in% epic) < 0.98) "450K" else "EPIC"
   }
+  # ExonBnd is an EPICv1-only annotation group; missMethyl stops on it elsewhere.
+  features <- if (array_type == "EPIC") genomic_features else setdiff(genomic_features, "ExonBnd")
+
+  pathways <- setup_cache(
+    DIRS = list(cache = cache_dir, pathways = pathways_dir),
+    cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
+  )$pathways
+  sets <- symbols_to_entrez_sets(switch(collection,
+                                        gobp     = pathways$go_bp,
+                                        kegg     = pathways$kegg,
+                                        hallmark = pathways$hallmarks))
+
+  m4a_progress(0, 2, paste0("Testing ", length(sets), " ", toupper(collection),
+                            " gene sets with missMethyl (", length(sig_cpg),
+                            " significant CpGs). GO BP takes a few minutes."))
+  res <- missMethyl::gsameth(sig.cpg = sig_cpg, all.cpg = all_cpg, collection = sets,
+                             array.type = array_type,
+                             genomic.features = features, sig.genes = sig_genes)
 
   m4a_progress(1, 2, "Saving missMethyl results", check = FALSE)
   res <- as.data.frame(res)
   res <- cbind(ID = rownames(res), res)
   rownames(res) <- NULL
   if ("P.DE" %in% names(res)) res <- res[order(res$P.DE), , drop = FALSE]
+  if (identical(collection, "gobp")) res <- add_go_terms(res, id_col = "ID")
 
-  stem <- paste0("missmethyl_", tolower(collection), "_", Sys.Date())
+  stem <- paste0("missmethyl_", collection, "_", Sys.Date())
   tryCatch({
     write.csv(res, file.path(out_dir, paste0(stem, ".csv")), row.names = FALSE)
     if (requireNamespace("openxlsx", quietly = TRUE)) {

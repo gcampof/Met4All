@@ -1247,6 +1247,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       m4a_submit("run_differential_analysis", args, app_dir, session_dir = DIRS$analysis)
     })
 
+    # What the last differential run compared. Gene-set runs reuse it, and their
+    # results are hidden once a newer differential run replaces it.
+    diff_snapshot <- reactiveVal(NULL)
+
     observeEvent(input$diff_met_run_analysis, {
       req(beta_merged(), targets_merged(), input$diff_met_id_col)
       validate(need(file.exists(beta_rds_path()),
@@ -1273,6 +1277,15 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         if (is.null(queued)) "Running differential methylation analysis..." else queued,
         type = "message", duration = 5
       )
+
+      diff_snapshot(list(
+        run            = (diff_snapshot()$run %||% 0L) + 1L,
+        targets        = targets_merged(),
+        id_col         = input$diff_met_id_col,
+        comparison_col = input$diff_met_comparison_col,
+        baseline       = input$diff_met_baseline,
+        comparison     = input$diff_met_comparison
+      ))
 
       diff_task$invoke(
         args = list(
@@ -1633,7 +1646,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     output$diff_met_dmg_table <- DT::renderDataTable({
       # The enrichment run rebuilds the gene table for its region, so prefer it;
       # before the first run, the promoter table from the differential run.
-      dmgs <- if (identical(enr_task$status(), "success")) {
+      dmgs <- if (identical(enr_task$status(), "success") && enr_is_current()) {
         tryCatch(enr_task$result()$dmgs, error = function(e) NULL)
       } else {
         NULL
@@ -1659,7 +1672,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       if (identical(input$enr_method, "missmethyl")) {
         res <- gst_result_or_message()
         # The table shows what was actually run, not what the selectors now say.
-        validate(need(identical(res$collection, M4A_GST_COLLECTION[[coll]]) &&
+        validate(need(identical(res$collection, coll) &&
                         identical(res$genomic_features,
                                   M4A_REGIONS[[input$enr_region]]$features), stale))
         make_dt(res$table)
@@ -1729,9 +1742,6 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     gst_task <- ExtendedTask$new(function(args, app_dir) {
       m4a_submit("run_missmethyl_gst", args, app_dir, session_dir = DIRS$analysis)
     })
-
-    # Collection ids in the selector are FGSEA's; missMethyl names them differently.
-    M4A_GST_COLLECTION <- list(gobp = "GO", kegg = "KEGG", hallmark = "Hallmark")
 
     # Regions, defined exactly as methylation_buildannot() defines them for the
     # gene-median route: Promoter200 = TSS200 + 1stExon + 5'UTR, and ExonBnd is
@@ -1810,7 +1820,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # the DMGs tab silently changes meaning after an enrichment run on another
     # region, and the exported file gives no clue either.
     dmg_region_id <- reactive({
-      if (!identical(enr_task$status(), "success")) return(NULL)
+      if (!identical(enr_task$status(), "success") || !enr_is_current()) return(NULL)
       grp <- tryCatch(enr_task$result()$region, error = function(e) NULL)
       if (is.null(grp)) return(NULL)
       ids <- names(M4A_REGIONS)
@@ -1858,7 +1868,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     gst_array <- reactive({
       if (is_epicv2()) return("EPIC_V2")
       arrs <- unlist(array_names())
-      if (is.null(arrs)) "EPIC" else if ("EPIC" %in% arrs) "EPIC" else "450K"
+      if (is.null(arrs)) "auto" else if ("EPIC" %in% arrs) "EPIC" else "450K"
     })
 
     # The gene-median branch: its own task, because the region changes the gene
@@ -1866,6 +1876,19 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     enr_task <- ExtendedTask$new(function(args, app_dir) {
       m4a_submit("run_gene_set_fgsea", args, app_dir, session_dir = DIRS$analysis)
     })
+
+    # Which differential run (and, for missMethyl, which thresholds) each gene-set
+    # result was made for. A result is only shown while those still hold.
+    enr_params <- reactiveVal(NULL)
+    gst_params <- reactiveVal(NULL)
+    enr_is_current <- function() {
+      !is.null(enr_params()) && identical(enr_params()$run, diff_snapshot()$run)
+    }
+    gst_is_current <- function() {
+      p <- gst_params()
+      !is.null(p) && identical(p$run, diff_snapshot()$run) &&
+        identical(p$fdr, input$diff_met_fdr_cut) && identical(p$lfc, input$diff_met_lfc_cut)
+    }
 
     observeEvent(input$enr_run, {
       if (!identical(diff_task$status(), "success")) {
@@ -1880,18 +1903,20 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           if (is.null(queued)) "Running gene-set enrichment on all CpGs..." else queued,
           type = "message", duration = 5
         )
+        snap <- diff_snapshot()
+        enr_params(list(run = snap$run))
         enr_task$invoke(
           args = list(
             beta_path      = beta_rds_path(),
-            targets        = targets_merged(),
+            targets        = snap$targets,
             cache_dir      = DIRS$cache,
             pathways_dir   = DIRS$pathways,
             annotation_pkg = annotation_pkg(),
             gene_set       = cfg$gene_set,
-            id_col         = input$diff_met_id_col,
-            comparison_col = input$diff_met_comparison_col,
-            baseline       = input$diff_met_baseline,
-            comparison     = input$diff_met_comparison,
+            id_col         = snap$id_col,
+            comparison_col = snap$comparison_col,
+            baseline       = snap$baseline,
+            comparison     = snap$comparison,
             region         = M4A_REGIONS[[input$enr_region]]$group,
             collection     = input$enr_collection,
             out_dir        = DIRS$differential
@@ -1913,16 +1938,20 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         type = "message", duration = 5
       )
 
+      gst_params(list(run = diff_snapshot()$run,
+                      fdr = input$diff_met_fdr_cut, lfc = input$diff_met_lfc_cut))
       gst_task$invoke(
         args = list(
           sig_cpg          = dmps$CpG,
           all_cpg_path     = res$all_cpg_path,
-          collection       = M4A_GST_COLLECTION[[input$enr_collection]],
+          collection       = input$enr_collection,
           genomic_features = M4A_REGIONS[[input$enr_region]]$features,
           array_type       = gst_array(),
           sig_genes        = isTRUE(input$gst_sig_genes),
+          cache_dir        = DIRS$cache,
           pathways_dir     = DIRS$pathways,
-          hallmark_gmt     = cfg$gene_set$hallmark,
+          annotation_pkg   = annotation_pkg(),
+          gene_set         = cfg$gene_set,
           out_dir          = DIRS$differential
         ),
         app_dir = app_dir
@@ -1943,6 +1972,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       res <- tryCatch(enr_task$result(), error = function(e) e)
       validate(need(!inherits(res, "error"),
                     paste("Gene-set enrichment failed:", m4a_error_text(res))))
+      validate(need(enr_is_current(),
+                    "The comparison changed since the last gene-set run. Press Run gene-set analysis."))
       res
     }
 
@@ -1954,16 +1985,21 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       res <- tryCatch(gst_task$result(), error = function(e) e)
       validate(need(!inherits(res, "error"),
                     paste("missMethyl failed:", m4a_error_text(res))))
+      validate(need(gst_is_current(),
+                    paste("The comparison or the FDR/logFC thresholds changed since the last",
+                          "missMethyl run. Press Run gene-set analysis.")))
       res
     }
 
     output$gst_summary <- renderUI({
-      task <- if (identical(input$enr_method, "missmethyl")) gst_task else enr_task
-      req(identical(task$status(), "success"))
-      txt <- if (identical(input$enr_method, "missmethyl")) {
+      mm   <- identical(input$enr_method, "missmethyl")
+      task <- if (mm) gst_task else enr_task
+      # Hidden while stale; the table says why.
+      req(identical(task$status(), "success"), if (mm) gst_is_current() else enr_is_current())
+      txt <- if (mm) {
         res <- gst_result_or_message()
         sprintf("%s gene sets | CpGs from: %s | %s significant of %s tested CpGs | array: %s",
-                res$collection, paste(res$genomic_features, collapse = ", "),
+                toupper(res$collection), paste(res$genomic_features, collapse = ", "),
                 format(res$n_sig, big.mark = ","), format(res$n_all, big.mark = ","),
                 res$array_type)
       } else {
@@ -1976,8 +2012,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     })
 
     gst_file <- function(ext) {
-      res <- tryCatch(gst_task$result(), error = function(e) NULL)
-      validate(need(!is.null(res), "Run missMethyl first."))
+      res <- gst_result_or_message()
       src <- file.path(DIRS$differential, paste0(res$file_stem, ".", ext))
       validate(need(file.exists(src), "The file is not ready. Please run missMethyl first."))
       src
