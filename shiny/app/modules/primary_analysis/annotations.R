@@ -13,8 +13,10 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
   annotation[annotation == " "] <- NA
   
   if (annot == "IlluminaHumanMethylationEPICanno.ilm10b2.hg19" | 
-      annot == "IlluminaHumanMethylationEPICanno.ilm10b4.hg19"){
-    aux <- annotation[, c(1:4, 22:24)]
+      annot == "IlluminaHumanMethylationEPICanno.ilm10b4.hg19" |
+      annot == "IlluminaHumanMethylationEPICv2anno.20a1.hg38"){
+    aux <- annotation[, c("chr", "pos", "strand", "Name",
+                          "UCSC_RefGene_Name", "UCSC_RefGene_Group")]
     aux.long.grp <- strsplit(aux$UCSC_RefGene_Group, ";")
     aux.long.gene <- strsplit(aux$UCSC_RefGene_Name, ";")
     stopifnot(all(sapply(aux.long.gene, length) ==
@@ -30,6 +32,10 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
     annotation$Group <- gsub("5'UTR|1stExon|TSS200", "Promoter200", annotation$UCSC_Group)
     annotation$Group <- gsub("TSS1500", "Promoter1500", annotation$Group)
     annotation$Group <- gsub("ExonBnd", "Body", annotation$Group)
+    # EPICv2 labels
+    annotation$Group <- gsub("^(5UTR|exon_1)$", "Promoter200", annotation$Group)
+    annotation$Group <- gsub("^exon_[0-9]+$", "Body", annotation$Group)
+    annotation$Group <- gsub("^3UTR$", "3'UTR", annotation$Group)
     annotation <- annotation[!duplicated(annotation), ]
     
     rm(aux, aux.long.gene, aux.long.grp, aux.len)
@@ -63,7 +69,7 @@ methylation_buildannot <- function(annot = "IlluminaHumanMethylationEPICanno.ilm
       annotation <- annotation[order(annotation$UCSC_Gene), ]
       return(annotation)
     } else {
-      stop("Not implemented yet, only works with IlluminaHumanMethylationEPICanno.ilm10b2/4.hg19 or IlluminaHumanMethylation450kanno.ilmn12.hg19")
+      stop("Not implemented yet, only works with IlluminaHumanMethylationEPICanno.ilm10b2/4.hg19, IlluminaHumanMethylationEPICv2anno.20a1.hg38 or IlluminaHumanMethylation450kanno.ilmn12.hg19")
     }
   }
 }
@@ -86,14 +92,15 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
                                    rm_mmap = FALSE){
   library(data.table)
   
-  group <- match.arg(group, choices = c("TSS200", "TSS1500", "Body", "BodyUTR"))
-  
+  group <- match.arg(group, choices = c("TSS200", "TSS1500", "Body", "BodyUTR", "All"))
+
   # Define grouping factors
   groupingfactor <- switch(group,
                            TSS200 = "Promoter200",
                            TSS1500 = c("Promoter200", "Promoter1500"),
                            Body = "Body",
-                           BodyUTR = c("Body", "3'UTR"))
+                           BodyUTR = c("Body", "3'UTR"),
+                           All = c("Promoter200", "Promoter1500", "Body", "3'UTR"))
   
   # Convert to data.table
   annot_dt <- as.data.table(annotation)
@@ -107,8 +114,9 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
     annot_dt[, n_groups := NULL]
   }
   
-  # Get unique probes per gene
-  probe_gene_map <- unique(annot_dt[, .(Name, UCSC_Gene)])
+  # Get unique probes per gene. Coordinates come along so the span of the region
+  # actually covered per gene can be reported next to the probe count.
+  probe_gene_map <- unique(annot_dt[, .(Name, UCSC_Gene, chr, pos)])
   
   # Convert beta matrix to data.table format
   beta_dt <- as.data.table(beta.matrix, keep.rownames = "Probe")
@@ -119,6 +127,11 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
   merged_dt <- probe_gene_map[beta_dt, on = c(Name = "Probe"), allow.cartesian = TRUE]
   setnames(merged_dt, "Name", "Probe")
   
+  # Per-probe table for the reporting columns, before the sample columns are
+  # melted away: one row per gene and probe, with its coordinate.
+  probe_info <- unique(merged_dt[!is.na(UCSC_Gene), .(UCSC_Gene, Probe, chr, pos)])
+  merged_dt[, c("chr", "pos") := NULL]
+
   # Melt to long format for efficient median calculation
   melted_dt <- data.table::melt(merged_dt, 
                                 id.vars = c("UCSC_Gene", "Probe"),
@@ -139,7 +152,24 @@ methylation_genemat_dt <- function(beta.matrix, annotation, group = "TSS200",
   
   # Remove rows with all NA
   mat_clean <- mat_matrix[rowSums(is.na(mat_matrix)) != ncol(mat_matrix), ]
-  
+
+  # Probes per gene actually summarised here, for reporting alongside the gene
+  # level statistics: a median over 2 probes is not the same evidence as one
+  # over 20. Counted from the same merge, so it costs no extra annotation pass.
+  n_probes_dt <- probe_info[, .N, by = UCSC_Gene]
+  n_probes <- setNames(n_probes_dt$N, n_probes_dt$UCSC_Gene)
+  attr(mat_clean, "n_probes") <- n_probes[rownames(mat_clean)]
+
+  # How far apart those probes lie: first to last position, in base pairs. Two
+  # probes 40 bp apart and two probes 4 kb apart are not the same measurement,
+  # and the count alone cannot tell them apart. Computed per chromosome and
+  # maximised, so a gene annotated on more than one contig cannot produce a
+  # nonsensical span. A single probe gives 0.
+  span_dt <- probe_info[, .(span = max(pos) - min(pos)), by = .(UCSC_Gene, chr)][
+    , .(span = max(span)), by = UCSC_Gene]
+  span_bp <- setNames(as.integer(span_dt$span), span_dt$UCSC_Gene)
+  attr(mat_clean, "span_bp") <- span_bp[rownames(mat_clean)]
+
   message(sprintf("Finished gene annotation: %d genes", nrow(mat_clean)))
   return(mat_clean)
 }

@@ -606,8 +606,7 @@ load_data_server <- function(id, DIRS, cfg) {
 
         # Only a descriptor is kept in memory; the matrix stays on disk for the
         # analysis workers.
-        beta_merged(list(path = res$beta_path, samples = res$samples,
-                         n_probes = res$n_probes))
+        beta_merged(beta_descriptor(res$beta_path))
         targets_merged(res$targets)
 
         snapshot_analysis(DIRS, type = "BETA", array_names = NULL,

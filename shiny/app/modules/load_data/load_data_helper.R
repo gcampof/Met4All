@@ -929,10 +929,35 @@ adjustFFPE <- function(methy, unmethy, tissue_type) {
 }
 
 
-finalizeBeta <- function(beta) {
-  beta <- aggregate_to_probes(beta)
-  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = TRUE)
+finalizeBeta <- function(beta, array, arrays = array) {
+  if (array != "EPIC_V2") {
+    return(DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = TRUE))
+  }
+  solo <- length(arrays) == 1L
+  # Native EPICv2 IDs select DMRcate's EPICv2 (hg38) SNP, XY and cross-hybridisation
+  # lists. EPICv2-only runs keep cross-hybridising probes for DMRcate to remap when
+  # calling DMRs; merged runs drop them, as for the other arrays.
+  beta <- DMRcate::rmSNPandCH(beta, dist = 2, mafcut = 0.05, rmXY = TRUE, rmcrosshyb = !solo)
+  if (solo) return(beta)
+
+  target <- if ("EPIC" %in% arrays) "EPIC" else "450K"
+  beta <- epicv2_to_legacy(beta, target)
+  message("EPICv2 mapped to ", nrow(beta), " ", target, " probe IDs")
   beta
+}
+
+
+# EPICv2 to EPICv1/450K probe IDs for merging, from the location matches of the
+# Peters et al. (2024) EPICv2manifest that DMRcate uses. Unmatched probes are
+# EPICv2-only CpGs and are dropped; replicates mapping to the same ID are averaged
+# (DMRcate's default epicv2Filter = "mean").
+epicv2_to_legacy <- function(beta, target) {
+  man <- AnnotationHub::AnnotationHub()[["AH116484"]]
+  ids <- man[rownames(beta), if (target == "EPIC") "EPICv1locmatch" else "K450locmatch"]
+  rm(man)
+  gc()
+  keep <- !is.na(ids) & nzchar(ids)
+  limma::avereps(beta[keep, , drop = FALSE], ID = ids[keep])
 }
 
 
@@ -1016,10 +1041,8 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
 
 
 generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
-                                 filter_dir, beta_dir, mean_detP = NULL) {
-  # Supplies aggregate_to_probes() for finalizeBeta()
-  library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
-
+                                 filter_dir, beta_dir, mean_detP = NULL,
+                                 arrays = array) {
   message("Processing array: ", array)
   array_beta_dir <- create_dir(file.path(beta_dir, array))
 
@@ -1068,7 +1091,7 @@ generate_beta_matrix <- function(array, rgSet, detP, norm_method, threshold,
 
   ## ---- 5. Final SNP / XY / cross-hyb filtering ----
   message("[beta] ", "Final SNP/XY/cross-hyb filtering...")
-  beta <- finalizeBeta(beta)
+  beta <- finalizeBeta(beta, array, arrays)
 
   ## ---- 6. Beta Boxplots ---
   message("[beta] ", "Generating Beta boxplots...")
@@ -1435,7 +1458,8 @@ run_beta_generation <- function(arrays, thresholds, qc_results, norm_method,
       threshold   = thr,
       filter_dir  = filter_dir,
       beta_dir    = beta_dir,
-      mean_detP   = mean_detP
+      mean_detP   = mean_detP,
+      arrays      = arrays
     )
 
     beta_paths <- c(beta_paths, result_paths$beta_path)

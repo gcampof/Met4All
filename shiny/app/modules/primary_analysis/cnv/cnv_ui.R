@@ -48,7 +48,7 @@ cnv_ui <- function(ns) {
             label       = tagList(icon("upload"), " Upload BED file",
                                   tags$span(
                                     style = "cursor: help; color: #6c757d; flex-shrink: 0;",
-                                    title = "Upload a .bed or .bed.gz file with genomic regions",
+                                    title = "Upload a .bed or .bed.gz file with genomic regions (hg19 for 450K/EPIC, hg38 for EPICv2)",
                                     icon("circle-info")
                                   )
             ),

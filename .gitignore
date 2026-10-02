@@ -53,3 +53,10 @@ shiny/logs/*
 
 shiny/app/cache/*
 shiny/app/data/*
+
+# Local runtime and review artefacts
+shiny/app/cache/
+shiny/app/data/
+shiny/logs/
+*.patch
+docker-compose.try.yml

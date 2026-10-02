@@ -29,6 +29,8 @@ default:
 
   # Annotation
   annotation_pkg: "IlluminaHumanMethylationEPICanno.ilm10b4.hg19"
+  # EPICv2-only analyses keep native EPICv2 probe IDs
+  annotation_pkg_epicv2: "IlluminaHumanMethylationEPICv2anno.20a1.hg38"
   
   # Geneset Pathways
   gene_set:

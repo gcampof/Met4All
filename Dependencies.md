@@ -107,6 +107,7 @@ These are low-level C/C++ libraries required to compile certain R packages.
 | [sesameData](https://bioconductor.org/packages/sesameData/) | Reference data for SeSAMe |
 | [DMRcate](https://bioconductor.org/packages/DMRcate/) | Differentially methylated region detection |
 | [DMRcatedata](https://bioconductor.org/packages/DMRcatedata/) | Reference data for DMRcate |
+| [AnnotationHub](https://bioconductor.org/packages/AnnotationHub/) | EPICv2manifest (Peters et al. 2024) used by DMRcate |
 | [methylclock](https://bioconductor.org/packages/methylclock/) | DNA methylation clocks (biological age) |
 | [limma](https://bioconductor.org/packages/limma/) | Linear models for differential analysis |
 
@@ -118,6 +119,8 @@ These are low-level C/C++ libraries required to compile certain R packages.
 | IlluminaHumanMethylationEPICv2manifest | EPICv2 array manifest |
 | IlluminaHumanMethylation450kanno.ilmn12.hg19 | 450k annotation (hg19) |
 | IlluminaHumanMethylationEPICanno.ilm10b4.hg19 | EPIC annotation (hg19) |
+| IlluminaHumanMethylationEPICv2anno.20a1.hg38 | EPICv2 annotation (hg38) |
+| [missMethyl](https://bioconductor.org/packages/missMethyl/) | Gene-set testing on significant CpGs, corrected for probes per gene |
 
 ### Copy Number Variation
 | Package | Purpose |
