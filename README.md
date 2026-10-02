@@ -35,7 +35,7 @@ For every analysis, you can customize both the **analytical parameters** and the
 
 ## Test Dataset
 
-We provide a pre-downloaded dataset from [GSE267015](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE267015) (n = 68 samples, EPIC + 450k arrays), from the retinoblastoma study published in [PMID 39079981](https://pubmed.ncbi.nlm.nih.gov/39079981/). You can download it directly from this repository's [Releases](../../releases) page.
+We provide two public test datasets: [GSE267015](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE267015), a retinoblastoma study on EPIC and 450K arrays ([PMID 39079981](https://pubmed.ncbi.nlm.nih.gov/39079981/)), which can be run from IDATs (68 samples) or from the authors' beta matrix (61 tumours), and [GSE240469](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE240469), the EPICv2 technical evaluation of Peters et al. ([PMID 38448820](https://pubmed.ncbi.nlm.nih.gov/38448820/), 40 samples). Download links and step-by-step instructions are in [TEST/readme.md](TEST/readme.md).
 
 ---
 
@@ -231,6 +231,10 @@ docker logs m4a-shiny
 ├── docker-compose.dev.yml
 ├── docker-compose.prod.yml
 ├── docker-compose.scale.yml
+├── TEST/
+│   ├── readme.md
+│   ├── GSE240469_targets.csv
+│   └── GSE267015_targets.csv
 ├── rstudio/
 │   └── Dockerfile
 └── shiny/
