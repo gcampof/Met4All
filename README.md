@@ -35,7 +35,7 @@ For every analysis, you can customize both the **analytical parameters** and the
 
 ## Test Dataset
 
-We provide a pre-downloaded dataset from [GSE267015](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE267015) (n = 68 samples, EPIC + 450k arrays), from the retinoblastoma study published in [PMID 39079981](https://pubmed.ncbi.nlm.nih.gov/39079981/). You can download it directly from this repository's [Releases](../../releases) page.
+We provide a test dataset from [GSE267015](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE267015), the retinoblastoma study published in [PMID 39079981](https://pubmed.ncbi.nlm.nih.gov/39079981/). It can be run from IDATs (68 samples, EPIC + 450K arrays) or from the authors' pre-computed beta matrix (61 tumours). Download links and step-by-step instructions are in [TEST/readme.md](TEST/readme.md).
 
 ---
 
@@ -231,6 +231,9 @@ docker logs m4a-shiny
 ├── docker-compose.dev.yml
 ├── docker-compose.prod.yml
 ├── docker-compose.scale.yml
+├── TEST/
+│   ├── readme.md
+│   └── targets.csv
 ├── rstudio/
 │   └── Dockerfile
 └── shiny/
