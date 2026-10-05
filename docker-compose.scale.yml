@@ -41,7 +41,7 @@ services:
 
   shiny:
     # Override with M4A_IMAGE to scale a locally built image instead.
-    image: ${M4A_IMAGE:-gcampof/methylation4all-shiny:1.0.1}
+    image: ${M4A_IMAGE:-gcampof/methylation4all-shiny:1.1.0}
     # Deliberately no container_name and no host port mapping: both make the
     # service impossible to scale, because the name and the port would collide
     # between replicas. The proxy above is what is published instead.
