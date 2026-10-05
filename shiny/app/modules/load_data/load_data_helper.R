@@ -1302,7 +1302,9 @@ extract_beta_and_targets <- function(input_dir, beta_dir, zip_paths = NULL){
   m4a_progress(1, 3, "Reading the beta matrix (this is the long part)")
   message("[beta] Reading beta matrix CSV")
   
-  beta <- read.csv(file.path(merged_dir, "beta_merged.csv"))
+  # check.names = FALSE: sample names such as "HCI-005_1" must stay as written to
+  # match the samplesheet.
+  beta <- read.csv(file.path(merged_dir, "beta_merged.csv"), check.names = FALSE)
   # Set cpgs id as rownames
   first_col_values <- as.character(beta[, 1])
   rownames(beta) <- first_col_values
