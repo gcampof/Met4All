@@ -1037,6 +1037,9 @@ generate_beta_boxplot_static <- function(array, beta, out_dir) {
   # Also save as PDF for better quality
   pdf_path <- file.path(out_dir, paste0("beta_boxplot_", array, ".pdf"))
   ggplot2::ggsave(pdf_path, p, width = plot_width, height = 6)
+
+  svg_path <- file.path(out_dir, paste0("beta_boxplot_", array, ".svg"))
+  ggplot2::ggsave(svg_path, p, width = plot_width, height = 6, device = svglite::svglite)
 }
 
 

@@ -12,7 +12,8 @@ prepare_cnv_data <- function(
     comparison_col,
     baseline = NULL,      
     comparison = NULL,
-    cache_dir = NULL
+    cache_dir = NULL,
+    sample_groups = NULL
 ){
   # Validate baseline and comparison
   if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
@@ -32,8 +33,11 @@ prepare_cnv_data <- function(
   mset_path <- mset_list[[array_type]]
   mset_object <- readRDS(mset_path)
   pd <- pData(mset_object)
-  normal_ids <- rownames(pd)[pd[[comparison_col]] %in% baseline]
-  case_ids   <- rownames(pd)[pd[[comparison_col]] %in% comparison]
+  # Groups from the live samplesheet (named by sample ID) when the app passes
+  # them, so columns added after the beta matrix was built can be used.
+  groups <- if (is.null(sample_groups)) pd[[comparison_col]] else unname(sample_groups[rownames(pd)])
+  normal_ids <- rownames(pd)[groups %in% baseline]
+  case_ids   <- rownames(pd)[groups %in% comparison]
   
   # Adapt array type for conumee2
   array_type <- tolower(trimws(array_type))
@@ -141,16 +145,27 @@ plot_pile_up <- function(cnv_data, baseline, comparison, out_dir) {
   
   png_file <- file.path(out_dir, paste0("cnv_pileup_", Sys.Date(), ".png"))
   pdf_file <- file.path(out_dir, paste0("cnv_pileup_", Sys.Date(), ".pdf"))
-  
-  title    <- "CNV Pile-up Plot"
-  subtitle <- paste0(
-    "Baseline: ", paste(baseline, collapse = ", "),
-    "     |     Comparison: ", paste(comparison, collapse = ", ")
-  )
-  
+  svg_file <- file.path(out_dir, paste0("cnv_pileup_", Sys.Date(), ".svg"))
+
+  # One line per group list, shortened to the plot width with "+N more" so a
+  # long list stays readable instead of running off the page.
+  fit_line <- function(label, groups) {
+    for (k in rev(seq_along(groups))) {
+      more <- length(groups) - k
+      txt  <- paste0(label, paste(groups[seq_len(k)], collapse = ", "),
+                     if (more > 0) paste0("  (+", more, " more)"))
+      if (strwidth(txt, units = "inches", cex = 0.8) <= par("pin")[1]) return(txt)
+    }
+    paste0(label, length(groups), " groups")
+  }
+
+  # set_par = FALSE keeps the plot's own margins in place afterwards, so the
+  # title and group lines land in its top margin rather than drifting.
   draw_pileup <- function() {
-    conumee2::CNV.summaryplot(cnv_data, main = title)
-    mtext(subtitle, side = 3, line = 0, cex = 0.75, col = "grey40")
+    conumee2::CNV.summaryplot(cnv_data, main = NULL, set_par = FALSE)
+    mtext("CNV Pile-up Plot", side = 3, line = 2.4, cex = 1.3, font = 2)
+    mtext(fit_line("Baseline: ", baseline), side = 3, line = 1.2, cex = 0.8, col = "grey40")
+    mtext(fit_line("Comparison: ", comparison), side = 3, line = 0.3, cex = 0.8, col = "grey40")
   }
   
   # Rendered at ~2x: the UI shows this at width:100%, so a small PNG gets
@@ -160,6 +175,10 @@ plot_pile_up <- function(cnv_data, baseline, comparison, out_dir) {
   dev.off()
   
   pdf(pdf_file, width = 12, height = 7)
+  draw_pileup()
+  dev.off()
+
+  svglite::svglite(svg_file, width = 12, height = 7)
   draw_pileup()
   dev.off()
   
@@ -179,6 +198,7 @@ plot_cnv_per_sample <- function(cnv_data, sample_name, baseline, comparison, out
   # Create filenames
   png_file <- file.path(out_dir, paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".png"))
   pdf_file <- file.path(out_dir, paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".pdf"))
+  svg_file <- file.path(out_dir, paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".svg"))
   
   # Find sample index
   sample_idx <- which(names(cnv_data@seg$summary) == sample_name)
@@ -199,6 +219,10 @@ plot_cnv_per_sample <- function(cnv_data, sample_name, baseline, comparison, out
   
   # Save as PDF
   pdf(pdf_file, width = 10, height = 7)
+  conumee2::CNV.genomeplot(cnv_data[sample_idx], main = title)
+  dev.off()
+
+  svglite::svglite(svg_file, width = 10, height = 7)
   conumee2::CNV.genomeplot(cnv_data[sample_idx], main = title)
   dev.off()
   

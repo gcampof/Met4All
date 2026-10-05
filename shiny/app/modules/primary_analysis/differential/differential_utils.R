@@ -205,6 +205,7 @@ plot_diff_methylation_density <- function(diff_met_data, color_palette, out_dir)
   # UI displays the PNG. Previously the same plot was drawn three times.
   png_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".png"))
   pdf_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".pdf"))
+  svg_file <- file.path(out_dir, paste0("density_plot_", Sys.Date(), ".svg"))
 
   tryCatch({
     # ~2x for the same reason as the CNV plots: shown at width:100%.
@@ -214,6 +215,10 @@ plot_diff_methylation_density <- function(diff_met_data, color_palette, out_dir)
     dev.off()
 
     pdf(pdf_file, width = 10, height = 8)
+    draw()
+    dev.off()
+
+    svglite::svglite(svg_file, width = 10, height = 8)
     draw()
     dev.off()
   }, error = function(e) {

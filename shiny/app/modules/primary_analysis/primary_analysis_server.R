@@ -303,7 +303,15 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         tabPanel(
           title = arr,
           br(),
-          imageOutput(outputId = ns(paste0("pa_beta_boxplot_", arr)), height = "600px"),
+          div(class = "d-flex gap-2 justify-content-end mb-2",
+              lapply(c("png", "pdf", "svg"), function(ext) {
+                downloadButton(ns(paste0("beta_boxplot_", arr, "_", ext)), paste0(" ", toupper(ext)),
+                               class = "btn btn-sm btn-outline-secondary")
+              })),
+          # Fixed height, natural width: the bars keep the same size whatever the
+          # number of samples, and large cohorts scroll sideways.
+          div(style = "overflow-x: auto;",
+              imageOutput(outputId = ns(paste0("pa_beta_boxplot_", arr)), height = "600px")),
           br()
         )
       })
@@ -332,13 +340,35 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           list(
             src = boxplot_path,
             contentType = "image/png",
-            width = "100%"
+            height = "600px"
           )
         }, deleteFile = FALSE)
       }
     })
     
     
+    # --- BETA MATRIX BOXPLOT EXPORTS ---
+    # Files written at beta generation; SVG only exists for analyses run since it
+    # was added.
+    observe({
+      for (arr in unlist(array_names())) local({
+        a <- arr
+        for (ext in c("png", "pdf", "svg")) local({
+          e <- ext
+          output[[paste0("beta_boxplot_", a, "_", e)]] <- downloadHandler(
+            filename = function() paste0("beta_boxplot_", a, ".", e),
+            content  = function(file) {
+              src <- file.path(DIRS$beta, a, paste0("beta_boxplot_", a, ".", e))
+              validate(need(file.exists(src),
+                            paste0("No ", toupper(e), " for this analysis. Re-run the beta matrix generation to create it.")))
+              file.copy(src, file)
+            }
+          )
+        })
+      })
+    })
+
+
     # --- QC PDF VIEWER UI ---
     output$qc_pdf_tabs <- renderUI({
       tabs <- lapply(array_names(), function(arr) {
@@ -461,7 +491,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       }, error = function(e) {
         shiny::validate(shiny::need(FALSE, paste0("Error: ", e$message)))
       })
-    }, res = 110)
+    })
     
     output$mds_download_png <- downloadHandler(
       filename = function() paste0("mds_plot_", Sys.Date(), ".png"),
@@ -581,7 +611,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           shiny::need(FALSE, paste0("Error rendering PCA plot: ", e$message))
         )
       })
-    }, res = 110)
+    })
     
     output$pca_download_png <- downloadHandler(
       filename = function() paste0("pca_plot_", Sys.Date(), ".png"),
@@ -872,7 +902,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         })
       }
       
-    }, res = 110)
+    })
     
     # Download handlers
     output$umap_download_png <- downloadHandler(
@@ -1021,7 +1051,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         padding                = grid::unit(c(10, 10, 10, 10), "mm")
       )
       removeNotification("ht_render")
-    }, res = 110)
+    })
     
     # Download handlers — notify user since redraw is needed for base graphics
     output$heatmap_download_png <- downloadHandler(
@@ -1209,7 +1239,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # Plot output - just renders the cached plot
     output$global_met_plot <- renderPlot({
       req(cached_global_met_plot())
-    }, res = 110)
+    })
     
     # Download handlers using cached plot
     output$global_met_download_png <- downloadHandler(
@@ -1347,6 +1377,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
                  downloadButton(ns("diff_met_download_density_png"), " PNG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1"),
                  downloadButton(ns("diff_met_download_density_pdf"), " PDF",
+                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+                 downloadButton(ns("diff_met_download_density_svg"), " SVG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1")
                )
              ),
@@ -1434,6 +1466,17 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       content = function(file) {
         src <- file.path(DIRS$differential, paste0("density_plot_", Sys.Date(), ".pdf"))
         validate(need(file.exists(src), "PDF file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
+
+    output$diff_met_download_density_svg <- downloadHandler(
+      filename = function() {
+        paste0("density_plot_", Sys.Date(), ".svg")
+      },
+      content = function(file) {
+        src <- file.path(DIRS$differential, paste0("density_plot_", Sys.Date(), ".svg"))
+        validate(need(file.exists(src), "SVG file not ready. Please run analysis first."))
         file.copy(src, file)
       }
     )
@@ -2165,6 +2208,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           comparison_col = input$cnv_comparison_col,
           baseline       = input$cnv_baseline,
           comparison     = input$cnv_comparison,
+          sample_groups  = setNames(as.character(cnv_targets()[[input$cnv_comparison_col]]),
+                                    cnv_sample_ids(cnv_targets())),
           cache_dir      = DIRS$cache
         ),
         app_dir = app_dir
@@ -2224,47 +2269,52 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       )
     }, deleteFile = FALSE)
     
-    # Update CNV comparison column based on selected array
-    observeEvent(input$cnv_array_select, {
-      req(input$cnv_array_select, mSetSq_list)
-      
-      selected_array <- input$cnv_array_select
-      mset_path <- mSetSq_list()[[selected_array]]
+    # CNV groups come from the live samplesheet, so clusters added by UMAP or the
+    # heatmap, and columns from a re-uploaded samplesheet, can be compared too.
+    # Rows are those of the selected array's samples, matched on the sample ID
+    # the MethylSet was built with.
+    cnv_sample_ids <- function(tg) {
+      if ("ID" %in% names(tg)) tg$ID else paste(tg$Sample_Group, tg$Sample_Name, sep = "_")
+    }
+    cnv_targets <- reactive({
+      req(input$cnv_array_select, targets_merged())
+      mset_path <- mSetSq_list()[[input$cnv_array_select]]
       req(!is.null(mset_path))
-
-      pd <- read_mset_pdata(mset_path)
-      if (!is.null(pd)) {
-        meta_cols <- colnames(pd)
-        updateSelectInput(session, "cnv_comparison_col", choices = meta_cols,
-                          selected = meta_cols[1])
-      }
+      tg <- targets_merged()
+      tg[cnv_sample_ids(tg) %in% rownames(read_mset_pdata(mset_path)), , drop = FALSE]
     })
-    
-    # Populate group checkboxes when comparison column changes for CNV
-    observeEvent(input$cnv_comparison_col, {
-      req(input$cnv_comparison_col, input$cnv_array_select, mSetSq_list)
-      
-      selected_array <- input$cnv_array_select
-      mset_path <- mSetSq_list()[[selected_array]]
-      req(!is.null(mset_path))
 
-      pd <- read_mset_pdata(mset_path)
-      if (!is.null(pd)) {
-        raw_vals <- na.omit(as.character(pd[[input$cnv_comparison_col]]))
-        
-        validate(
-          need(length(raw_vals) > 0,
-               paste0("Column '", input$cnv_comparison_col, "' has no non-missing values. Please choose a different column."))
-        )
-        
-        counts <- table(raw_vals)
-        levels <- sort(names(counts))
-        labels <- paste0(levels, " (", as.numeric(counts[levels]), " ",
-                         ifelse(as.numeric(counts[levels]) == 1, "sample", "samples"), ")")
-        
-        updateCheckboxGroupInput(session, "cnv_baseline", choices = setNames(levels, labels), selected = NULL)
-        updateCheckboxGroupInput(session, "cnv_comparison", choices = setNames(levels, labels), selected = NULL)
-      }
+    # Update CNV comparison column based on selected array
+    observe({
+      cols <- colnames(cnv_targets())
+      sel  <- isolate(input$cnv_comparison_col)
+      updateSelectInput(session, "cnv_comparison_col", choices = cols,
+                        selected = if (!is.null(sel) && sel %in% cols) sel else cols[1])
+    })
+
+    # Populate group checkboxes when comparison column changes for CNV
+    observe({
+      req(input$cnv_comparison_col)
+      tg <- cnv_targets()
+      req(input$cnv_comparison_col %in% colnames(tg))
+      raw_vals <- na.omit(as.character(tg[[input$cnv_comparison_col]]))
+
+      validate(
+        need(length(raw_vals) > 0,
+             paste0("Column '", input$cnv_comparison_col, "' has no non-missing values. Please choose a different column."))
+      )
+
+      counts <- table(raw_vals)
+      levels <- sort(names(counts))
+      labels <- paste0(levels, " (", as.numeric(counts[levels]), " ",
+                       ifelse(as.numeric(counts[levels]) == 1, "sample", "samples"), ")")
+
+      # Keep the user's picks when the samplesheet gains columns.
+      keep <- function(id) intersect(isolate(input[[id]]), levels)
+      updateCheckboxGroupInput(session, "cnv_baseline", choices = setNames(levels, labels),
+                               selected = keep("cnv_baseline"))
+      updateCheckboxGroupInput(session, "cnv_comparison", choices = setNames(levels, labels),
+                               selected = keep("cnv_comparison"))
     })
     
     # Populate sample radio buttons when CNV data is ready
@@ -2343,6 +2393,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
                  downloadButton(ns("cnv_download_pileup_png"), " PNG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1"),
                  downloadButton(ns("cnv_download_pileup_pdf"), " PDF",
+                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+                 downloadButton(ns("cnv_download_pileup_svg"), " SVG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1")
                )
              ),
@@ -2355,6 +2407,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
                  downloadButton(ns("cnv_download_sample_png"), " PNG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1"),
                  downloadButton(ns("cnv_download_sample_pdf"), " PDF",
+                                class = "btn btn-sm btn-outline-secondary flex-grow-1"),
+                 downloadButton(ns("cnv_download_sample_svg"), " SVG",
                                 class = "btn btn-sm btn-outline-secondary flex-grow-1")
                )
              ),
@@ -2389,6 +2443,17 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         file.copy(src, file)
       }
     )
+
+    output$cnv_download_pileup_svg <- downloadHandler(
+      filename = function() {
+        paste0("cnv_pileup_", Sys.Date(), ".svg")
+      },
+      content = function(file) {
+        src <- file.path(DIRS$cnv, paste0("cnv_pileup_", Sys.Date(), ".svg"))
+        validate(need(file.exists(src), "SVG file not ready. Please run analysis first."))
+        file.copy(src, file)
+      }
+    )
     
     # Per-sample plot download handlers
     output$cnv_download_sample_png <- downloadHandler(
@@ -2415,6 +2480,20 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
         sample_safe <- gsub("[^A-Za-z0-9]", "_", input$cnv_selected_sample)
         src <- file.path(DIRS$cnv, paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".pdf"))
         validate(need(file.exists(src), "PDF file not ready. Please select a sample."))
+        file.copy(src, file)
+      }
+    )
+
+    output$cnv_download_sample_svg <- downloadHandler(
+      filename = function() {
+        sample_safe <- gsub("[^A-Za-z0-9]", "_", input$cnv_selected_sample)
+        paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".svg")
+      },
+      content = function(file) {
+        req(input$cnv_selected_sample, input$cnv_selected_sample != "")
+        sample_safe <- gsub("[^A-Za-z0-9]", "_", input$cnv_selected_sample)
+        src <- file.path(DIRS$cnv, paste0("cnv_sample_", sample_safe, "_", Sys.Date(), ".svg"))
+        validate(need(file.exists(src), "SVG file not ready. Please select a sample."))
         file.copy(src, file)
       }
     )
