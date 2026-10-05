@@ -55,7 +55,7 @@ The technical evaluation of the EPICv2 array by Peters et al. (2024), GEO access
 
 ### From the beta matrix
 
-1. Download [GSE240469_EPICv2_processed.csv.gz](https://ftp.ncbi.nlm.nih.gov/geo/series/GSE240nnn/GSE240469/suppl/GSE240469_EPICv2_processed.csv.gz) from GEO.
+1. Download [GSE240469_EPICv2_processed.csv.gz](   https://ftp.ncbi.nlm.nih.gov/geo/series/GSE240nnn/GSE240469/suppl/GSE240469%5FEPICv2%5Fprocessed.csv.gz) from GEO.
 2. From the repository root, keep the beta columns (the file alternates each sample with its detection p-values) and zip them with the samplesheet:
 
    ```bash
