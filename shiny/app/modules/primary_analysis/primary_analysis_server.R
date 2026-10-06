@@ -76,20 +76,15 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       }
     })
     
-    # Enable IDAT-only controls if type is IDATS
+    # IDAT-only views follow the data actually loaded (IDAT loads have array
+    # names, beta uploads none), both ways: enabling on the selected card alone
+    # left them on after picking IDATs and then uploading a beta matrix.
     observe({
-      req(load_data_return$type_selected())
-      
-      if (load_data_return$type_selected() == "IDATS") {
-        # Enable buttons
-        shinyjs::enable("nav_beta_matrix")
-        shinyjs::enable("nav_qc")
-        shinyjs::enable("nav_cnv")
-        
-        # Remove tooltip wrapper class so hover tip disappears too
-        shinyjs::removeClass("nav_beta_matrix_wrapper", "btn-disabled-tooltip")
-        shinyjs::removeClass("nav_qc_wrapper", "btn-disabled-tooltip")
-        shinyjs::removeClass("nav_cnv_wrapper", "btn-disabled-tooltip")
+      from_idats <- length(unlist(array_names())) > 0
+      for (id in c("nav_beta_matrix", "nav_qc", "nav_cnv")) {
+        shinyjs::toggleState(id, condition = from_idats)
+        # The wrapper class carries the "only from IDATs" hover tip.
+        shinyjs::toggleClass(paste0(id, "_wrapper"), "btn-disabled-tooltip", condition = !from_idats)
       }
     })
 

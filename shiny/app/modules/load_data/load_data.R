@@ -608,6 +608,8 @@ load_data_server <- function(id, DIRS, cfg) {
         # analysis workers.
         beta_merged(beta_descriptor(res$beta_path))
         targets_merged(res$targets)
+        # No arrays: keeps the IDAT-only views (beta, QC, CNV) disabled.
+        array_names(list())
 
         snapshot_analysis(DIRS, type = "BETA", array_names = NULL,
                           mset_paths = list(), targets = res$targets)
