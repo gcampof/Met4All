@@ -259,6 +259,8 @@ m4a_queue_message <- function() {
 m4a_submit <- function(fn_name, args, app_dir = getwd(), session_dir = NULL,
                        heavy = TRUE) {
   stopifnot(is.character(fn_name), length(fn_name) == 1L, is.list(args))
+  # Otherwise the panel shows the previous job's last message until this one's first.
+  m4a_clear_progress(session_dir)
 
   log_file <- if (!is.null(session_dir)) {
     d <- file.path(session_dir, "logs")

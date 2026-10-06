@@ -74,8 +74,7 @@ prepare_differential_methylation_data <- function(
     id_col,
     comparison_col,
     baseline = NULL,
-    comparison = NULL,
-    region = "TSS200"
+    comparison = NULL
 ){
   if (length(baseline) == 0) stop("Please assign at least one level to Baseline")
   if (length(comparison) == 0) stop("Please assign at least one level to Comparison")
@@ -94,36 +93,13 @@ prepare_differential_methylation_data <- function(
   keep_probes <- rownames(beta2) %in% built_annot$Name
   beta2 <- beta2[keep_probes, ]
   
-  # Gene-level matrix for the chosen region (promoter by default).
-  tss200 <- methylation_genemat_dt(beta2, built_annot, group = region)
-  # Reporting columns for the gene table (attributes set by the line above):
-  # how many probes each median is based on, and how far apart they lie.
-  n_region_probes <- attr(tss200, "n_probes")
-  region_span_bp  <- attr(tss200, "span_bp")
-  # tss200 <- methylation_genemat(beta2, built_annot)
-  # NA filter for row names
-  tss200 <- tss200[!is.na(rownames(tss200)), ]
-  
   # Extract and clean groups
   groups <- trimws(as.character(targets2[[comparison_col]]))
   groups[groups == ""] <- NA
   
-  # NA filter
-  # The gene matrix must be filtered with the same mask as the beta matrix: it
-  # was built from every sample, while `keep2` below is computed on the groups
-  # AFTER this filter. Left unfiltered, R recycles the shorter logical index and
-  # lmFit() fails with "row dimension of design doesn't match column dimension of
-  # data object" -- but only for sample sheets that have a blank or NA group.
-  keep     <- !is.na(groups)
-  targets2 <- targets2[keep, , drop = FALSE]
-  beta2    <- beta2[, keep, drop = FALSE]
-  tss200   <- tss200[, keep, drop = FALSE]
-  groups   <- groups[keep]
-
-  # Recode groups in levels
-  keep2  <- groups %in% c(baseline, comparison)
+  # Samples with no group, or a level in neither group, are left out.
+  keep2  <- !is.na(groups) & groups %in% c(baseline, comparison)
   beta2  <- beta2[, keep2, drop = FALSE]
-  tss200_2    <- tss200[, keep2, drop = FALSE]
   groups_subset <- groups[keep2]
   groups_recoded <- ifelse(groups_subset %in% baseline, "Baseline", "Comparison")
   groups_factor <- factor(groups_recoded, levels = c("Baseline", "Comparison"))
@@ -132,11 +108,31 @@ prepare_differential_methylation_data <- function(
   if (sum(groups_factor == "Baseline") < 2) stop("Need at least 2 samples in Baseline group")
   if (sum(groups_factor == "Comparison") < 2) stop("Need at least 2 samples in Comparison group")
   
-  # Run limma on genes for later use (FGSEA)
-  desing <- model.matrix(~ groups_factor)
-  fit_tss  <- limma::lmFit(tss200_2, desing)
-  fit2_tss <- limma::eBayes(fit_tss)
-  toptab_gene_all <- limma::topTable(fit2_tss, adjust = "fdr", number = Inf, sort.by = "p")
+  # Build comparison label for plot titles
+  comparison_label <- paste0(
+    "Baseline: [", paste(baseline, collapse = ", "), "]  vs  ",
+    "Comparison: [", paste(comparison, collapse = ", "), "]"
+  )
+  list(
+    beta_diff = beta2,
+    groups_factor = groups_factor,
+    limma_desing = model.matrix(~ groups_factor),
+    comparison_label = comparison_label
+  )
+}
+
+# Gene-level limma for one region: the region's probes are summarised to a
+# median per gene, then fitted. Used by the DMGs and the FGSEA runs.
+diff_gene_table <- function(diff_met_data, built_annot, region = "TSS200") {
+  genes <- methylation_genemat_dt(diff_met_data$beta_diff, built_annot, group = region)
+  # Reporting columns for the gene table (attributes set by the line above):
+  # how many probes each median is based on, and how far apart they lie.
+  n_region_probes <- attr(genes, "n_probes")
+  region_span_bp  <- attr(genes, "span_bp")
+  genes <- genes[!is.na(rownames(genes)), , drop = FALSE]
+
+  fit <- limma::eBayes(limma::lmFit(genes, diff_met_data$limma_desing))
+  toptab_gene_all <- limma::topTable(fit, adjust = "fdr", number = Inf, sort.by = "p")
   # First column: the number of probes summarised per gene, so a reader can see
   # whether a gene-level logFC rests on one probe or on twenty.
   if (!is.null(n_region_probes) && nrow(toptab_gene_all) > 0) {
@@ -155,19 +151,7 @@ prepare_differential_methylation_data <- function(
     )
     rownames(toptab_gene_all) <- gene_ids
   }
-  
-  # Build comparison label for plot titles
-  comparison_label <- paste0(
-    "Baseline: [", paste(baseline, collapse = ", "), "]  vs  ",
-    "Comparison: [", paste(comparison, collapse = ", "), "]"
-  )
-  list(
-    beta_diff = beta2,
-    groups_factor = groups_factor,
-    limma_desing = desing,
-    toptab_gene_all = toptab_gene_all,
-    comparison_label = comparison_label
-  )
+  toptab_gene_all
 }
 
 
@@ -505,55 +489,60 @@ get_fgsea <- function(
 
 
 
-# Whole differential pipeline, run inside one worker job.
-#
-# beta_diff (the subsetted beta matrix) is the largest object in this analysis and
-# is needed by every step, so the entire pipeline runs where it lives and only the
-# display tables and file paths come back. Inputs are a path plus small values;
-# `targets` is passed by value because the samplesheet is editable in-session and
-# the copy on disk may be stale.
-#
-# DMPs are fitted at fdr_max (the top of the UI slider) so the caller can apply
-# the user's FDR, logFC and row-count choices as cheap post-filters instead of
-# re-running the fit on every slider drag.
-run_differential_analysis <- function(
-    beta_path,
-    targets,
-    cache_dir,
-    pathways_dir,
-    annotation_pkg,
-    gene_set,
-    palette_dir,
-    palette_name,
-    id_col,
-    comparison_col,
-    baseline,
-    comparison,
-    with_champ,
-    fdr_max,
-    with_dmrcate = FALSE,
-    out_dir
-) {
-  # Pathway enrichment is no longer part of this run: it is chosen and launched
-  # from the Gene-set enrichment tab, one region and one collection at a time.
-  n_steps <- if (isTRUE(with_champ) || isTRUE(with_dmrcate)) 6L else 5L
-  m4a_progress(0, n_steps, "Loading beta matrix and annotation")
+# ---- Differential steps, one worker job each ---------------------------------
+# The sidebar's Run Analysis sets up the comparison and draws the density plot;
+# DMPs, DMRs, DMGs and gene sets each run from their own tab, so the user only
+# waits for what they ask for. beta_diff is the largest object here and must not
+# cross back to the main process, so every step rebuilds it from the beta file
+# and returns only display tables and file paths. `targets` is passed by value
+# because the samplesheet is editable in-session and the copy on disk may be stale.
+
+# Shared first step of every job: beta, annotation, and the two groups.
+load_diff_inputs <- function(beta_path, targets, cache_dir, pathways_dir, annotation_pkg,
+                             gene_set, id_col, comparison_col, baseline, comparison) {
   beta  <- readRDS(beta_path)
   cache <- setup_cache(
     DIRS = list(cache = cache_dir, pathways = pathways_dir),
     cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
   )
-
-  m4a_progress(1, n_steps, "Summarising probes to genes")
   diff <- prepare_differential_methylation_data(
     beta, targets, cache$built_annot,
     id_col, comparison_col, baseline, comparison
   )
+  list(diff = diff, cache = cache)
+}
 
-  m4a_progress(2, n_steps, "Fitting differentially methylated positions")
-  # Fitted once at the permissive end of the slider; filtered by the caller.
+run_diff_setup <- function(..., palette_dir, palette_name, out_dir) {
+  m4a_progress(0, 2, "Loading beta matrix and assigning groups")
+  diff <- load_diff_inputs(...)$diff
+
+  palettes <- prepare_color_palettes(palette_dir)
+  pal_fn   <- palettes$all_palettes[[palette_name]]
+  if (is.null(pal_fn)) pal_fn <- palettes$all_palettes[[1]]
+
+  m4a_progress(1, 2, "Drawing the density plot")
+  density_png <- plot_diff_methylation_density(diff, pal_fn, out_dir)
+
+  m4a_progress(2, 2, "Comparison ready", check = FALSE)
+  list(
+    density_png      = density_png,
+    comparison_label = diff$comparison_label,
+    n_baseline       = sum(diff$groups_factor == "Baseline"),
+    n_comparison     = sum(diff$groups_factor == "Comparison")
+  )
+}
+
+# DMPs are fitted at fdr_max (the top of the UI slider) so the caller can apply
+# the user's FDR, logFC and row-count choices as cheap post-filters instead of
+# re-running the fit on every slider drag.
+run_diff_dmps <- function(..., method = c("limma", "champ"), fdr_max, out_dir) {
+  method <- match.arg(method)
+  m4a_progress(0, 2, "Loading beta matrix and assigning groups")
+  diff <- load_diff_inputs(...)$diff
+
+  m4a_progress(1, 2, if (method == "champ") "Fitting DMPs with ChAMP" else "Fitting DMPs with limma")
   dmps_all <- get_dmps(diff, fdr_cut = fdr_max, lfc_cut = 0,
-                       with_champ = with_champ, out_dir = out_dir)
+                       with_champ = method == "champ", out_dir = out_dir)
 
   # Background for missMethyl: every CpG the DMP fit was run on.
   all_cpg_path <- file.path(out_dir, "dmp_tested_cpgs.rds")
@@ -563,46 +552,35 @@ run_differential_analysis <- function(
              all_cpg_path <<- NA_character_
            })
 
-  m4a_progress(3, n_steps, "Collecting differentially methylated genes")
+  m4a_progress(2, 2, "DMPs complete", check = FALSE)
+  list(dmps_all = dmps_all, all_cpg_path = all_cpg_path, method = method)
+}
+
+# ChAMP ProbeLasso for 450K/EPICv1; DMRcate for EPICv2, which ChAMP cannot read.
+run_diff_dmrs <- function(..., method = c("champ", "dmrcate"), out_dir) {
+  method <- match.arg(method)
+  m4a_progress(0, 2, "Loading beta matrix and assigning groups")
+  diff <- load_diff_inputs(...)$diff
+
+  m4a_progress(1, 2, if (method == "champ") "Detecting DMRs with ChAMP (slow)"
+                     else "Detecting DMRs with DMRcate (slow)")
+  dmrs <- if (method == "champ") get_dmrs(diff, TRUE, out_dir) else get_dmrs_dmrcate(diff, out_dir)
+
+  m4a_progress(2, 2, "DMRs complete", check = FALSE)
+  list(dmrs = dmrs, method = method)
+}
+
+run_diff_dmgs <- function(..., region = "TSS200", out_dir) {
+  m4a_progress(0, 2, "Loading beta matrix and assigning groups")
+  inp <- load_diff_inputs(...)
+
+  m4a_progress(1, 2, paste0("Summarising probes to genes (", region, ") and fitting limma"))
+  diff <- inp$diff
+  diff$toptab_gene_all <- diff_gene_table(diff, inp$cache$built_annot, region)
   dmgs <- get_dmgs(diff, 0, out_dir)
 
-  # ChAMP DMRs are opt-in and by far the slowest step.
-  if (isTRUE(with_champ)) m4a_progress(4, n_steps, "Detecting DMRs with ChAMP (slow)")
-  if (isTRUE(with_dmrcate)) m4a_progress(4, n_steps, "Detecting DMRs with DMRcate (slow)")
-  dmrs <- if (isTRUE(with_champ)) {
-    tryCatch(get_dmrs(diff, TRUE, out_dir),
-             error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
-  } else if (isTRUE(with_dmrcate)) {
-    tryCatch(get_dmrs_dmrcate(diff, out_dir),
-             error = function(e) { warning("DMRs failed: ", conditionMessage(e)); data.frame() })
-  } else {
-    data.frame()
-  }
-
-  palettes <- prepare_color_palettes(palette_dir)
-  pal_fn   <- palettes$all_palettes[[palette_name]]
-  if (is.null(pal_fn)) pal_fn <- palettes$all_palettes[[1]]
-
-  m4a_progress(n_steps - 1L, n_steps, "Drawing the density plot")
-  density_png <- tryCatch(
-    plot_diff_methylation_density(diff, pal_fn, out_dir),
-    error = function(e) { warning("Density plot failed: ", conditionMessage(e)); NULL }
-  )
-
-  m4a_progress(n_steps, n_steps, "Differential methylation complete", check = FALSE)
-
-  list(
-    dmps_all         = dmps_all,
-    all_cpg_path     = all_cpg_path,
-    dmrs             = dmrs,
-    dmgs             = dmgs,
-    density_png      = density_png,
-    comparison_label = diff$comparison_label,
-    with_champ       = isTRUE(with_champ),
-    with_dmrcate     = isTRUE(with_dmrcate),
-    n_baseline       = sum(diff$groups_factor == "Baseline"),
-    n_comparison     = sum(diff$groups_factor == "Comparison")
-  )
+  m4a_progress(2, 2, "DMGs complete", check = FALSE)
+  list(dmgs = dmgs, region = region)
 }
 
 
@@ -719,46 +697,21 @@ run_missmethyl_gst <- function(
 # The gene-median route, run on demand for one region and one collection.
 # Summarises the region's probes to a gene median, fits limma on genes, and
 # ranks every gene by logFC for fgsea -- no CpG is selected, so there is no
-# probe-number bias to correct. Returns the gene table too: it is the same
-# object the DMGs tab shows, now tied to the region actually chosen.
-run_gene_set_fgsea <- function(
-    beta_path,
-    targets,
-    cache_dir,
-    pathways_dir,
-    annotation_pkg,
-    gene_set,
-    id_col,
-    comparison_col,
-    baseline,
-    comparison,
-    region     = "TSS200",
-    collection = "gobp",
-    out_dir
-) {
-  m4a_progress(0, 3, "Loading beta matrix and annotation")
-  beta  <- readRDS(beta_path)
-  cache <- setup_cache(
-    DIRS = list(cache = cache_dir, pathways = pathways_dir),
-    cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
-  )
+# probe-number bias to correct.
+run_gene_set_fgsea <- function(..., region = "TSS200", collection = "gobp", out_dir) {
+  m4a_progress(0, 3, "Loading beta matrix and assigning groups")
+  inp <- load_diff_inputs(...)
 
   m4a_progress(1, 3, paste0("Summarising probes to genes (", region, ")"))
-  diff <- prepare_differential_methylation_data(
-    beta, targets, cache$built_annot,
-    id_col, comparison_col, baseline, comparison,
-    region = region
-  )
-  rm(beta)
-  dmgs <- get_dmgs(diff, 0, out_dir)
+  diff <- inp$diff
+  diff$toptab_gene_all <- diff_gene_table(diff, inp$cache$built_annot, region)
 
   m4a_progress(2, 3, paste0("Running FGSEA (", collection, ")"))
-  table <- get_fgsea(diff, cache$pathways, collection, out_dir)
+  table <- get_fgsea(diff, inp$cache$pathways, collection, out_dir)
 
   m4a_progress(3, 3, "Gene-set analysis complete", check = FALSE)
   list(
     table      = table,
-    dmgs       = dmgs,
     region     = region,
     collection = collection,
     n_genes    = nrow(diff$toptab_gene_all)

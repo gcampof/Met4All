@@ -102,9 +102,12 @@ make_dt <- function(df, editable = FALSE, container_width = "100%") {
     class      = "display compact hover stripe",
     style      = "bootstrap4",
     extensions = c("Buttons", "KeyTable", "Scroller"),
+    # `table` is the DataTables API, not the element. Using it as the element threw
+    # on every render, and Shiny then dropped the other outputs in that update.
     callback   = JS("
-      table.style.width = '100%';
-      table.style.tableLayout = 'fixed';
+      var el = table.table().node();
+      el.style.width = '100%';
+      el.style.tableLayout = 'fixed';
     ")
   ) |>
     DT::formatStyle(

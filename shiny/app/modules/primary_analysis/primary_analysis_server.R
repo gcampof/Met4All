@@ -41,11 +41,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       if (is_epicv2()) cfg$annotation_pkg_epicv2 else cfg$annotation_pkg
     })
 
-    # ChAMP only knows 450K/EPICv1, so EPICv2 gets DMRcate for DMRs instead.
-    observe({
-      shinyjs::toggle("diff_met_champ_opt", condition = !is_epicv2())
-      shinyjs::toggle("diff_met_dmrcate_opt", condition = is_epicv2())
-    })
+    # ChAMP only knows 450K/EPICv1: EPICv2 DMPs use limma, and its DMRs DMRcate.
+    observe(shinyjs::toggle("dmp_method_opt", condition = !is_epicv2()))
 
     # Uploaded palettes live in this session's own directory, so one user's
     # upload does not turn up in every other user's dropdowns.
@@ -1270,25 +1267,49 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     )
     
     # --- DIFFERENTIAL METHYLATION LOGIC ---
-    # Use eventReactive directly
-    # The whole differential pipeline runs in one worker job: every step needs
-    # beta_diff, which is the largest object here and must not cross back.
+    # Run Analysis sets up the comparison and draws the density plot. DMPs, DMRs,
+    # DMGs and gene sets are separate worker jobs started from their own tabs, all
+    # on the comparison frozen here, so the user only waits for what they ask for.
     diff_task <- ExtendedTask$new(function(args, app_dir) {
-      m4a_submit("run_differential_analysis", args, app_dir, session_dir = DIRS$analysis)
+      m4a_submit("run_diff_setup", args, app_dir, session_dir = DIRS$analysis)
+    })
+    dmp_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_diff_dmps", args, app_dir, session_dir = DIRS$analysis)
+    })
+    dmr_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_diff_dmrs", args, app_dir, session_dir = DIRS$analysis)
+    })
+    dmg_task <- ExtendedTask$new(function(args, app_dir) {
+      m4a_submit("run_diff_dmgs", args, app_dir, session_dir = DIRS$analysis)
     })
 
-    # What the last differential run compared. Gene-set runs reuse it, and their
-    # results are hidden once a newer differential run replaces it.
+    # What the last Run Analysis compared. Every step runs on it, and a step's
+    # result is hidden once a newer Run Analysis replaces it.
     diff_snapshot <- reactiveVal(NULL)
+
+    # What every step needs to rebuild the two groups in the worker.
+    diff_base_args <- function(snap) {
+      list(
+        beta_path      = beta_rds_path(),
+        targets        = snap$targets,
+        cache_dir      = DIRS$cache,
+        pathways_dir   = DIRS$pathways,
+        annotation_pkg = annotation_pkg(),
+        gene_set       = cfg$gene_set,
+        id_col         = snap$id_col,
+        comparison_col = snap$comparison_col,
+        baseline       = snap$baseline,
+        comparison     = snap$comparison,
+        out_dir        = DIRS$differential
+      )
+    }
 
     observeEvent(input$diff_met_run_analysis, {
       req(beta_merged(), targets_merged(), input$diff_met_id_col)
       validate(need(file.exists(beta_rds_path()),
                     "Beta matrix file not found on disk; please reload the data."))
 
-      # Checked here rather than in the worker. The worker raises the same thing,
-      # but only after the annotation join, so the user waited minutes for it and
-      # then got it wrapped in an ExtendedTask trace.
+      # Checked here rather than in the worker, so the user is told at once.
       missing <- c(
         if (length(input$diff_met_comparison_col) == 0) "a comparison column",
         if (length(input$diff_met_baseline) == 0)       "at least one Baseline level",
@@ -1304,64 +1325,158 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
 
       queued <- m4a_queue_message()
       showNotification(
-        if (is.null(queued)) "Running differential methylation analysis..." else queued,
+        if (is.null(queued)) "Setting up the comparison..." else queued,
         type = "message", duration = 5
       )
 
-      diff_snapshot(list(
+      snap <- list(
         run            = (diff_snapshot()$run %||% 0L) + 1L,
         targets        = targets_merged(),
         id_col         = input$diff_met_id_col,
         comparison_col = input$diff_met_comparison_col,
         baseline       = input$diff_met_baseline,
         comparison     = input$diff_met_comparison
-      ))
-
+      )
+      diff_snapshot(snap)
       diff_task$invoke(
-        args = list(
-          beta_path      = beta_rds_path(),
-          targets        = targets_merged(),
-          cache_dir      = DIRS$cache,
-          pathways_dir   = DIRS$pathways,
-          annotation_pkg = annotation_pkg(),
-          gene_set       = cfg$gene_set,
-          palette_dir    = palette_dirs(),
-          palette_name   = input$diff_met_color_palette,
-          id_col         = input$diff_met_id_col,
-          comparison_col = input$diff_met_comparison_col,
-          baseline       = input$diff_met_baseline,
-          comparison     = input$diff_met_comparison,
-          with_champ     = !is_epicv2() && isTRUE(input$diff_met_run_champ),
-          with_dmrcate   = is_epicv2() && isTRUE(input$diff_met_run_dmrcate),
-          fdr_max        = DIFF_FDR_MAX,
-          out_dir        = DIRS$differential
-        ),
+        args = c(diff_base_args(snap),
+                 list(palette_dir  = palette_dirs(),
+                      palette_name = input$diff_met_color_palette)),
         app_dir = app_dir
       )
     })
 
-    observe({
-      if (identical(diff_task$status(), "running")) {
-        shinyjs::disable("diff_met_run_analysis")
+    # Which comparison run each step's result was made for.
+    step_run <- list(dmp = reactiveVal(NULL), dmr = reactiveVal(NULL), dmg = reactiveVal(NULL))
+
+    diff_step_invoke <- function(task, step, extra, msg) {
+      if (!identical(diff_task$status(), "success")) {
+        showNotification("Press Run Analysis first to set up the comparison.",
+                         type = "warning", duration = 6)
+        return(invisible(FALSE))
+      }
+      queued <- m4a_queue_message()
+      showNotification(if (is.null(queued)) msg else queued, type = "message", duration = 5)
+      snap <- diff_snapshot()
+      if (is.null(step)) enr_params(list(run = snap$run)) else step_run[[step]](snap$run)
+      task$invoke(args = c(diff_base_args(snap), extra), app_dir = app_dir)
+      invisible(TRUE)
+    }
+
+    observeEvent(input$dmp_run, diff_step_invoke(
+      dmp_task, "dmp",
+      list(method = if (is_epicv2()) "limma" else input$dmp_method, fdr_max = DIFF_FDR_MAX),
+      "Computing DMPs..."))
+    observeEvent(input$dmr_run, diff_step_invoke(
+      dmr_task, "dmr",
+      list(method = if (is_epicv2()) "dmrcate" else "champ"),
+      "Computing DMRs..."))
+    observeEvent(input$dmg_run, diff_step_invoke(
+      dmg_task, "dmg",
+      list(region = M4A_REGIONS[[input$dmg_region]]$group),
+      "Computing DMGs..."))
+
+    # A button is disabled while its own job runs.
+    for (b in list(list("diff_met_run_analysis", diff_task), list("dmp_run", dmp_task),
+                   list("dmr_run", dmr_task), list("dmg_run", dmg_task))) {
+      local({
+        id <- b[[1]]; task <- b[[2]]
+        observe({
+          if (identical(task$status(), "running")) shinyjs::disable(id) else shinyjs::enable(id)
+        })
+      })
+    }
+
+    # One place decides what a step's tab shows: a hint before it runs, a spinner
+    # while it runs, the error if it failed, a prompt if the comparison changed
+    # since, and otherwise the result.
+    step_state <- function(task, run_id, what, button) {
+      status <- task$status()
+      if (identical(status, "running")) {
+        return(list(state = "running", msg = paste0("Computing ", what, "...")))
+      }
+      setup <- diff_task$status()
+      if (identical(setup, "initial")) {
+        return(list(state = "idle",
+                    msg = "Choose the groups in the sidebar and press Run Analysis first."))
+      }
+      if (identical(setup, "running")) {
+        return(list(state = "idle", msg = paste0("Setting up the comparison. Then press ", button, ".")))
+      }
+      if (identical(setup, "error")) {
+        return(list(state = "idle", msg = "Run Analysis failed; see the Density Plot tab."))
+      }
+      if (identical(status, "initial")) {
+        return(list(state = "idle", msg = paste0("Press ", button, " to compute ", what, ".")))
+      }
+      res <- tryCatch(task$result(), error = function(e) e)
+      if (inherits(res, "error")) {
+        return(list(state = "error", msg = paste0(what, " failed: ", m4a_error_text(res))))
+      }
+      if (!identical(run_id, diff_snapshot()$run)) {
+        return(list(state = "stale",
+                    msg = paste0("The comparison changed since these ", what,
+                                 " were computed. Press ", button, " again.")))
+      }
+      list(state = "done", result = res)
+    }
+
+    setup_state <- reactive({
+      status <- diff_task$status()
+      if (identical(status, "initial")) {
+        return(list(state = "idle", msg = "Choose the groups in the sidebar and press Run Analysis."))
+      }
+      if (identical(status, "running")) {
+        return(list(state = "running",
+                    msg = "Setting up the comparison and drawing the density plot..."))
+      }
+      res <- tryCatch(diff_task$result(), error = function(e) e)
+      if (inherits(res, "error")) {
+        return(list(state = "error", msg = paste("Run Analysis failed:", m4a_error_text(res))))
+      }
+      list(state = "done", result = res)
+    })
+
+    # Nothing while running or done: the progress bar covers a running job.
+    step_status_ui <- function(st) {
+      if (st$state %in% c("done", "running")) return(NULL)
+      col <- switch(st$state, error = "#dc3545", stale = "#fd7e14", "#6c757d")
+      div(
+        class = "card p-3 mb-3",
+        style = paste0("border-left: 3px solid ", col, ";"),
+        span(style = "font-size: 0.9rem;", icon("circle-info"), " ", st$msg)
+      )
+    }
+
+    step_result <- function(st) {
+      req(identical(st$state, "done"))
+      st$result
+    }
+
+    dmp_state <- reactive(step_state(dmp_task, step_run$dmp(), "DMPs", "Run DMPs"))
+    dmr_state <- reactive(step_state(dmr_task, step_run$dmr(), "DMRs", "Run DMRs"))
+    dmg_state <- reactive({
+      st <- step_state(dmg_task, step_run$dmg(), "DMGs", "Run DMGs")
+      if (identical(st$state, "done") &&
+          !identical(st$result$region, M4A_REGIONS[[input$dmg_region]]$group)) {
+        st <- list(state = "stale", msg = "Press Run DMGs to compute the genes for the selected region.")
+      }
+      st
+    })
+
+    output$diff_setup_status <- renderUI(step_status_ui(setup_state()))
+    output$dmp_status        <- renderUI(step_status_ui(dmp_state()))
+    output$dmr_status        <- renderUI(step_status_ui(dmr_state()))
+    output$dmg_status        <- renderUI(step_status_ui(dmg_state()))
+
+    output$dmr_method_note <- renderUI({
+      if (is_epicv2()) {
+        span(class = "text-muted", "Method: DMRcate on hg38, with EPICv2 replicate probes remapped. Takes several minutes.")
       } else {
-        shinyjs::enable("diff_met_run_analysis")
+        span(class = "text-muted", "Method: ChAMP ProbeLasso. Slow, often tens of minutes.")
       }
     })
 
-    diff_met_data <- reactive({
-      status <- diff_task$status()
-      validate(need(status != "initial", "Configure the parameters and press Run Analysis."))
-      validate(need(status != "running", "Differential methylation analysis running..."))
-      tryCatch(
-        diff_task$result(),
-        error = function(e) {
-          validate(need(FALSE, paste0("Error preparing differential methylation data: ",
-                                      m4a_error_text(e))))
-          NULL
-        }
-      )
-    })
-    
     # Dynamic Export Buttons based on active tab
     output$diff_met_export_buttons <- renderUI({
       req(input$diff_met_tabset)
@@ -1484,10 +1599,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # DMP Exports - Fetch pre-saved files
     output$diff_met_download_dmps_csv <- downloadHandler(
       filename = function() {
-        paste0("dmps_", ifelse(input$diff_met_run_champ, "champ", "limma"), "_", Sys.Date(), ".csv")
+        paste0("dmps_", step_result(dmp_state())$method, "_", Sys.Date(), ".csv")
       },
       content = function(file) {
-        src <- file.path(DIRS$differential, paste0("dmps_", ifelse(input$diff_met_run_champ, "champ", "limma"), "_", Sys.Date(), ".csv"))
+        src <- file.path(DIRS$differential, paste0("dmps_", step_result(dmp_state())$method, "_", Sys.Date(), ".csv"))
         validate(need(file.exists(src), "CSV file not ready. Please run analysis first."))
         file.copy(src, file)
       }
@@ -1495,10 +1610,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     
     output$diff_met_download_dmps_xlsx <- downloadHandler(
       filename = function() {
-        paste0("dmps_", ifelse(input$diff_met_run_champ, "champ", "limma"), "_", Sys.Date(), ".xlsx")
+        paste0("dmps_", step_result(dmp_state())$method, "_", Sys.Date(), ".xlsx")
       },
       content = function(file) {
-        src <- file.path(DIRS$differential, paste0("dmps_", ifelse(input$diff_met_run_champ, "champ", "limma"), "_", Sys.Date(), ".xlsx"))
+        src <- file.path(DIRS$differential, paste0("dmps_", step_result(dmp_state())$method, "_", Sys.Date(), ".xlsx"))
         validate(need(file.exists(src), "XLSX file not ready. Please run analysis first."))
         file.copy(src, file)
       }
@@ -1619,12 +1734,10 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       }
     )
     
-    # All of these now read from the single worker result. The FDR / logFC / row
-    # sliders are pure post-filters: the fit already ran once at DIFF_FDR_MAX, so
-    # moving a slider re-filters a table instead of re-running limma or ChAMP.
+    # Moving the FDR / logFC / row sliders only re-filters: the fit already ran
+    # once at DIFF_FDR_MAX, so limma or ChAMP are not re-run on every drag.
     diff_filtered_dmps <- reactive({
-      res <- diff_met_data()
-      dmps <- res$dmps_all
+      dmps <- step_result(dmp_state())$dmps_all
       req(is.data.frame(dmps))
       if (nrow(dmps) == 0) return(dmps)
 
@@ -1641,60 +1754,26 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
 
     # Density plot render (produced by the worker; shown as the saved PNG)
     output$diff_met_density_plot <- renderImage({
-      res <- diff_met_data()
+      res <- step_result(setup_state())
       validate(need(!is.null(res$density_png) && file.exists(res$density_png),
                     "Density plot not available."))
       list(src = res$density_png, contentType = "image/png", width = "100%")
     }, deleteFile = FALSE)
 
-    # DT renders server-side, so an error thrown in here reaches the browser as a
-    # bare "DataTables warning ... Ajax error". Any failure of the differential
-    # run is turned into a readable message instead.
-    diff_result_or_message <- function() {
-      status <- diff_task$status()
-      validate(need(!identical(status, "initial"),
-                    "Run the differential methylation analysis to see this table."))
-      validate(need(!identical(status, "running"),
-                    "Differential methylation analysis is still running."))
-      res <- tryCatch(diff_met_data(), error = function(e) e)
-      validate(need(!inherits(res, "error"),
-                    paste("Differential methylation analysis failed:",
-                          m4a_error_text(res))))
-      res
-    }
-
-    # DMP table
+    # The tables render only once their step is done; until then the status card
+    # above each one says why it is empty.
     output$diff_met_dmp_table <- DT::renderDataTable({
-      diff_result_or_message()
       req(input$diff_dmps_top_cpgs)
       dmps <- diff_filtered_dmps()
-      if (nrow(dmps) > 0) {
-        make_dt(head(dmps, input$diff_dmps_top_cpgs))
-      } else {
-        make_dt(dmps)
-      }
+      make_dt(if (nrow(dmps) > 0) head(dmps, input$diff_dmps_top_cpgs) else dmps)
     })
 
-    # DMR table
     output$diff_met_dmr_table <- DT::renderDataTable({
-      res <- diff_result_or_message()
-      validate(need(isTRUE(res$with_champ) || isTRUE(res$with_dmrcate),
-                    paste0("DMRs can only be calculated when '",
-                           if (is_epicv2()) "Run DMRcate" else "Run ChAMP",
-                           "' is activated.")))
-      make_dt(res$dmrs)
+      make_dt(step_result(dmr_state())$dmrs)
     })
 
-    # DMG table
     output$diff_met_dmg_table <- DT::renderDataTable({
-      # The enrichment run rebuilds the gene table for its region, so prefer it;
-      # before the first run, the promoter table from the differential run.
-      dmgs <- if (identical(enr_task$status(), "success") && enr_is_current()) {
-        tryCatch(enr_task$result()$dmgs, error = function(e) NULL)
-      } else {
-        NULL
-      }
-      if (is.null(dmgs)) dmgs <- diff_result_or_message()$dmgs
+      dmgs <- step_result(dmg_state())$dmgs
       cut  <- if (is.null(input$diff_met_dmg_lfc_cut) || is.na(input$diff_met_dmg_lfc_cut)) {
         0
       } else {
@@ -1706,25 +1785,9 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       make_dt(dmgs)
     })
 
-    # FGSEA tables
-    # One table for both methods. FGSEA results come from the main differential
-    # run; missMethyl results come from its own task, run on demand.
+    # One table for both gene-set methods; each has its own task.
     output$diff_met_enrichment_table <- DT::renderDataTable({
-      coll <- if (is.null(input$enr_collection)) "gobp" else input$enr_collection
-      stale <- "Press Run gene-set analysis for the current selection."
-      if (identical(input$enr_method, "missmethyl")) {
-        res <- gst_result_or_message()
-        # The table shows what was actually run, not what the selectors now say.
-        validate(need(identical(res$collection, coll) &&
-                        identical(res$genomic_features,
-                                  M4A_REGIONS[[input$enr_region]]$features), stale))
-        make_dt(res$table)
-      } else {
-        res <- enr_result_or_message()
-        validate(need(identical(res$collection, coll) &&
-                        identical(res$region, M4A_REGIONS[[input$enr_region]]$group), stale))
-        make_dt(res$table)
-      }
+      make_dt(step_result(enr_view())$table)
     })
 
     # Explains the two routes at the point where the choice is made.
@@ -1859,29 +1922,14 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       )
     })
 
-    # Which region and which run the gene table on screen came from. Without it
-    # the DMGs tab silently changes meaning after an enrichment run on another
-    # region, and the exported file gives no clue either.
-    dmg_region_id <- reactive({
-      if (!identical(enr_task$status(), "success") || !enr_is_current()) return(NULL)
-      grp <- tryCatch(enr_task$result()$region, error = function(e) NULL)
-      if (is.null(grp)) return(NULL)
-      ids <- names(M4A_REGIONS)
-      hit <- ids[vapply(ids, function(i) identical(M4A_REGIONS[[i]]$group, grp), logical(1))]
-      if (length(hit) == 0L) NULL else hit[1]
-    })
-
+    # How the DMGs are calculated, for the region selected in the DMGs tab.
     output$dmg_source_note <- renderUI({
-      req(identical(diff_task$status(), "success"))
-      from_enr <- !is.null(dmg_region_id())
-      region   <- if (from_enr) dmg_region_id() else "promoter"
-      reg      <- M4A_REGIONS[[region]]
+      reg <- M4A_REGIONS[[input$dmg_region]]
+      req(!is.null(reg))
 
       div(
         class = "m4a-route m4a-route-on mb-3",
-        div(span(class = "m4a-route-title", "How these genes were calculated"),
-            span(class = "m4a-route-sub", " \u00b7 ",
-                 if (from_enr) "from the last gene-set run" else "from the differential methylation run")),
+        div(span(class = "m4a-route-title", "How these genes are calculated")),
         div(class = "m4a-flow",
             span(class = "m4a-chip", paste0(reg$label, " probes")),
             span(class = "m4a-arrow", "\u2192"),
@@ -1890,19 +1938,14 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
             span(class = "m4a-chip", "limma on genes"),
             span(class = "m4a-arrow", "\u2192"),
             span(class = "m4a-chip", "FDR across genes")),
-        m4a_gene_map(region),
-        p(class = "m4a-route-body text-muted mt-2",
-          strong(reg$label), ": ", reg$note,
-          if (!from_enr) {
-            " Run the Gene-set enrichment tab on another region to recalculate these genes for it."
-          } else {
-            " This is the region of the last gene-set run, not necessarily the one selected there now."
-          }),
+        m4a_gene_map(input$dmg_region),
+        p(class = "m4a-route-body text-muted mt-2", strong(reg$label), ": ", reg$note),
         p(class = "m4a-route-body text-muted mb-0",
           "\u0022Probes in region\u0022 is how many probes each gene\u0027s median is based on, and ",
-          "\u0022Probe span (bp)\u0022 is the distance from the first to the last of them \u2014 a lower ",
+          "\u0022Probe span (bp)\u0022 is the distance from the first to the last of them, a lower ",
           "bound on the region, not its annotated length. The export contains every gene; the ",
-          "threshold below filters the view only.")
+          "Min. gene |logFC| filter above changes the view only. Gene medians have smaller ",
+          "logFCs than single CpGs, so it is separate from the CpG cut-off in the sidebar.")
       )
     })
 
@@ -1924,58 +1967,29 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     # result was made for. A result is only shown while those still hold.
     enr_params <- reactiveVal(NULL)
     gst_params <- reactiveVal(NULL)
-    enr_is_current <- function() {
-      !is.null(enr_params()) && identical(enr_params()$run, diff_snapshot()$run)
-    }
-    gst_is_current <- function() {
-      p <- gst_params()
-      !is.null(p) && identical(p$run, diff_snapshot()$run) &&
-        identical(p$fdr, input$diff_met_fdr_cut) && identical(p$lfc, input$diff_met_lfc_cut)
-    }
 
     observeEvent(input$enr_run, {
-      if (!identical(diff_task$status(), "success")) {
-        showNotification("Run the differential methylation analysis first.",
+      if (!identical(input$enr_method, "missmethyl")) {
+        diff_step_invoke(enr_task, NULL, list(region     = M4A_REGIONS[[input$enr_region]]$group,
+                                              collection = input$enr_collection),
+                         "Running gene-set enrichment on all CpGs...")
+        return()
+      }
+
+      # missMethyl tests the significant CpGs, so it needs current DMPs.
+      dmp <- dmp_state()
+      if (!identical(dmp$state, "done")) {
+        showNotification("Run DMPs first: missMethyl tests the significant CpGs.",
                          type = "warning", duration = 6)
         return()
       }
-      queued <- m4a_queue_message()
-
-      if (!identical(input$enr_method, "missmethyl")) {
-        showNotification(
-          if (is.null(queued)) "Running gene-set enrichment on all CpGs..." else queued,
-          type = "message", duration = 5
-        )
-        snap <- diff_snapshot()
-        enr_params(list(run = snap$run))
-        enr_task$invoke(
-          args = list(
-            beta_path      = beta_rds_path(),
-            targets        = snap$targets,
-            cache_dir      = DIRS$cache,
-            pathways_dir   = DIRS$pathways,
-            annotation_pkg = annotation_pkg(),
-            gene_set       = cfg$gene_set,
-            id_col         = snap$id_col,
-            comparison_col = snap$comparison_col,
-            baseline       = snap$baseline,
-            comparison     = snap$comparison,
-            region         = M4A_REGIONS[[input$enr_region]]$group,
-            collection     = input$enr_collection,
-            out_dir        = DIRS$differential
-          ),
-          app_dir = app_dir
-        )
-        return()
-      }
-
-      res  <- diff_met_data()
       dmps <- diff_filtered_dmps()
       if (!is.data.frame(dmps) || nrow(dmps) == 0 || !"CpG" %in% names(dmps)) {
         showNotification("No DMPs pass the current thresholds.", type = "warning", duration = 6)
         return()
       }
 
+      queued <- m4a_queue_message()
       showNotification(
         if (is.null(queued)) "Running missMethyl gene-set testing..." else queued,
         type = "message", duration = 5
@@ -1986,7 +2000,7 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       gst_task$invoke(
         args = list(
           sig_cpg          = dmps$CpG,
-          all_cpg_path     = res$all_cpg_path,
+          all_cpg_path     = dmp$result$all_cpg_path,
           collection       = input$enr_collection,
           genomic_features = M4A_REGIONS[[input$enr_region]]$features,
           array_type       = gst_array(),
@@ -2007,46 +2021,46 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
       if (busy) shinyjs::disable("enr_run") else shinyjs::enable("enr_run")
     })
 
-    enr_result_or_message <- function() {
-      status <- enr_task$status()
-      validate(need(!identical(status, "initial"),
-                    "Choose a region and gene sets, then press Run gene-set analysis."))
-      validate(need(!identical(status, "running"), "Gene-set enrichment is running..."))
-      res <- tryCatch(enr_task$result(), error = function(e) e)
-      validate(need(!inherits(res, "error"),
-                    paste("Gene-set enrichment failed:", m4a_error_text(res))))
-      validate(need(enr_is_current(),
-                    "The comparison changed since the last gene-set run. Press Run gene-set analysis."))
-      res
-    }
+    # The selected method's result, or why there is none. A result also goes
+    # stale when the selectors (or, for missMethyl, the thresholds) no longer
+    # match what was run.
+    enr_view <- reactive({
+      mm <- identical(input$enr_method, "missmethyl")
+      st <- if (mm) {
+        step_state(gst_task, gst_params()$run, "missMethyl gene-set tests", "Run gene-set analysis")
+      } else {
+        step_state(enr_task, enr_params()$run, "gene-set enrichment", "Run gene-set analysis")
+      }
+      if (identical(st$state, "done")) {
+        res  <- st$result
+        coll <- if (is.null(input$enr_collection)) "gobp" else input$enr_collection
+        reg  <- M4A_REGIONS[[input$enr_region]]
+        same <- identical(res$collection, coll) && if (mm) {
+          identical(res$genomic_features, reg$features) &&
+            identical(gst_params()$fdr, input$diff_met_fdr_cut) &&
+            identical(gst_params()$lfc, input$diff_met_lfc_cut)
+        } else {
+          identical(res$region, reg$group)
+        }
+        if (!same) {
+          st <- list(state = "stale", msg = paste0(
+            "The selection", if (mm) " or the FDR/logFC thresholds",
+            " changed since the last run. Press Run gene-set analysis."))
+        }
+      }
+      st
+    })
 
-    gst_result_or_message <- function() {
-      status <- gst_task$status()
-      validate(need(!identical(status, "initial"),
-                    "Choose a region and gene sets, then press Run gene-set analysis."))
-      validate(need(!identical(status, "running"), "missMethyl is running..."))
-      res <- tryCatch(gst_task$result(), error = function(e) e)
-      validate(need(!inherits(res, "error"),
-                    paste("missMethyl failed:", m4a_error_text(res))))
-      validate(need(gst_is_current(),
-                    paste("The comparison or the FDR/logFC thresholds changed since the last",
-                          "missMethyl run. Press Run gene-set analysis.")))
-      res
-    }
+    output$enr_status <- renderUI(step_status_ui(enr_view()))
 
     output$gst_summary <- renderUI({
-      mm   <- identical(input$enr_method, "missmethyl")
-      task <- if (mm) gst_task else enr_task
-      # Hidden while stale; the table says why.
-      req(identical(task$status(), "success"), if (mm) gst_is_current() else enr_is_current())
-      txt <- if (mm) {
-        res <- gst_result_or_message()
+      res <- step_result(enr_view())
+      txt <- if (identical(input$enr_method, "missmethyl")) {
         sprintf("%s gene sets | CpGs from: %s | %s significant of %s tested CpGs | array: %s",
                 toupper(res$collection), paste(res$genomic_features, collapse = ", "),
                 format(res$n_sig, big.mark = ","), format(res$n_all, big.mark = ","),
                 res$array_type)
       } else {
-        res <- enr_result_or_message()
         sprintf("%s gene sets | %s region | %s genes ranked by logFC",
                 toupper(res$collection), M4A_REGIONS[[input$enr_region]]$label,
                 format(res$n_genes, big.mark = ","))
@@ -2055,7 +2069,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
     })
 
     gst_file <- function(ext) {
-      res <- gst_result_or_message()
+      res <- step_result(step_state(gst_task, gst_params()$run, "missMethyl gene-set tests",
+                                    "Run gene-set analysis"))
       src <- file.path(DIRS$differential, paste0(res$file_stem, ".", ext))
       validate(need(file.exists(src), "The file is not ready. Please run missMethyl first."))
       src
@@ -2169,8 +2184,8 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
 
     # One progress panel, driven by whichever task is running
     for (tsk in c("mds_task", "pca_task", "umap_task", "predict_task",
-                  "heatmap_task", "global_task", "diff_task", "gst_task",
-                  "enr_task", "cnv_task")) {
+                  "heatmap_task", "global_task", "diff_task", "dmp_task",
+                  "dmr_task", "dmg_task", "gst_task", "enr_task", "cnv_task")) {
       local({
         nm <- tsk
         observe({

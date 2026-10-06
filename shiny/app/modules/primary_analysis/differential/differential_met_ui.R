@@ -2,6 +2,18 @@
 # that the user's FDR choice is a cheap post-filter; the two must stay in step.
 DIFF_FDR_MAX <- 0.2
 
+# The run controls at the top of each results tab: its options, its button, and a
+# status slot that says what is happening (idle, running, failed, out of date).
+diff_step_bar <- function(ns, button_id, label, status_id, ...) {
+  tagList(
+    div(class = "d-flex flex-wrap gap-3 align-items-end mb-2",
+        ...,
+        actionButton(ns(button_id), paste0(" ", label),
+                     class = "btn btn-outline-primary mb-3", icon = icon("play"))),
+    uiOutput(ns(status_id))
+  )
+}
+
 # Module UI function - Improved version matching heatmap aesthetics
 differential_met_ui <- function(ns){
   div(
@@ -25,7 +37,10 @@ differential_met_ui <- function(ns){
             class = "btn btn-primary w-100",
             icon = icon("play"),
             style = "font-weight: bold;"
-          )
+          ),
+          p(class = "text-muted mb-0 mt-2", style = "font-size: 0.72rem;",
+            "Sets up the comparison and draws the density plot. DMPs, DMRs, DMGs ",
+            "and gene sets then run from their own tabs.")
         ),
         
         # Dynamic Export Buttons (changes based on active tab)
@@ -79,38 +94,6 @@ differential_met_ui <- function(ns){
                       min = 0, max = 1, value = 0.2, step = 0.05, ticks = FALSE)
         ),
         
-        # Advanced Options
-        div(
-          style = "border-left: 3px solid #6c757d; padding-left: 10px; margin-bottom: 12px;",
-          p(class = "text-uppercase fw-bold mb-2",
-            style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #6c757d;",
-            icon("gears", style = "font-size: 0.75rem;"), " Advanced Options"),
-          
-          div(id = ns("diff_met_champ_opt"),
-              div(class = "d-flex align-items-center justify-content-between mb-1",
-                  tags$label("Run ChAMP", style = "font-size: 0.78rem;",
-                             `for` = ns("diff_met_run_champ")),
-                  shinyWidgets::materialSwitch(inputId = ns("diff_met_run_champ"),
-                                               label   = NULL,
-                                               value   = FALSE,
-                                               status  = "primary")),
-              p(class = "text-muted",
-                style = "font-size: 0.7rem; margin-top: -6px; margin-bottom: 10px;",
-                "DMR/DMP via ChAMP (slow)")),
-          # EPICv2 only: ChAMP does not support it, so DMRs come from DMRcate.
-          shinyjs::hidden(div(id = ns("diff_met_dmrcate_opt"),
-              div(class = "d-flex align-items-center justify-content-between mb-1",
-                  tags$label("Run DMRcate", style = "font-size: 0.78rem;",
-                             `for` = ns("diff_met_run_dmrcate")),
-                  shinyWidgets::materialSwitch(inputId = ns("diff_met_run_dmrcate"),
-                                               label   = NULL,
-                                               value   = FALSE,
-                                               status  = "primary")),
-              p(class = "text-muted",
-                style = "font-size: 0.7rem; margin-top: -6px; margin-bottom: 10px;",
-                "DMRs via DMRcate, EPICv2 hg38 (slow)")))
-        ),
-        
         # Appearance
         div(
           style = "border-left: 3px solid #198754; padding-left: 10px; margin-bottom: 12px;",
@@ -138,6 +121,7 @@ differential_met_ui <- function(ns){
           title = tagList(icon("chart-area"), " Density Plot"),
           value = "density",
           br(),
+          uiOutput(ns("diff_setup_status")),
           div(
             class = "card p-3 plot-card",
             plotOutput(ns("diff_met_density_plot"), height = "100%")
@@ -149,13 +133,15 @@ differential_met_ui <- function(ns){
           title = tagList(icon("table"), " DMPs"),
           value = "dmps",
           br(),
-          div(
-            style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
-            p(class = "text-uppercase fw-bold mb-2",
-              style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
-              icon("filter", style = "font-size: 0.75rem;"), " Top CpGs displayed:"),
-            numericInput(ns("diff_dmps_top_cpgs"), label = NULL,
-                         value = 1000, min = 10, max = 10000, step = 100, width = "100%")
+          diff_step_bar(
+            ns, "dmp_run", "Run DMPs", "dmp_status",
+            # ChAMP reads 450K/EPICv1 only; the server hides this for EPICv2.
+            div(id = ns("dmp_method_opt"),
+                selectInput(ns("dmp_method"), "Method:",
+                            choices = c("limma" = "limma", "ChAMP (slower)" = "champ"),
+                            selected = "limma", width = "190px")),
+            numericInput(ns("diff_dmps_top_cpgs"), "Top CpGs shown:",
+                         value = 1000, min = 10, max = 10000, step = 100, width = "140px")
           ),
           div(
             class = "dt-container",
@@ -169,6 +155,10 @@ differential_met_ui <- function(ns){
           title = tagList(icon("table"), " DMRs"),
           value = "dmrs",
           br(),
+          diff_step_bar(
+            ns, "dmr_run", "Run DMRs", "dmr_status",
+            div(class = "mb-3", style = "font-size: 0.85rem;", uiOutput(ns("dmr_method_note")))
+          ),
           div(
             class = "dt-container",
             style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
@@ -181,18 +171,19 @@ differential_met_ui <- function(ns){
           title = tagList(icon("table"), " DMGs"),
           value = "dmgs",
           br(),
-          uiOutput(ns("dmg_source_note")),
-          div(
-            style = "border-left: 3px solid #0d6efd; padding-left: 10px; margin-bottom: 12px;",
-            p(class = "text-uppercase fw-bold mb-2",
-              style = "font-size: 0.7rem; letter-spacing: 0.08em; color: #0d6efd;",
-              icon("filter", style = "font-size: 0.75rem;"), " Minimum |logFC| at gene level:"),
-            numericInput(ns("diff_met_dmg_lfc_cut"), label = NULL,
-                         value = 0, min = 0, max = 1, step = 0.01, width = "100%"),
-            p(class = "text-muted mb-0", style = "font-size: 0.72rem;",
-              "Gene values are medians over the region's probes, so their logFC is smaller ",
-              "than a single CpG's. This threshold is separate from the CpG one in the sidebar.")
+          diff_step_bar(
+            ns, "dmg_run", "Run DMGs", "dmg_status",
+            selectInput(ns("dmg_region"), "Gene region:",
+                        choices = c("Promoter" = "promoter",
+                                    "Extended promoter" = "promoter1500",
+                                    "Gene body" = "body",
+                                    "Whole gene" = "all"),
+                        selected = "promoter", width = "190px"),
+            # Gene medians have smaller logFCs than single CpGs, hence its own cut-off.
+            numericInput(ns("diff_met_dmg_lfc_cut"), "Min. gene |logFC|:",
+                         value = 0, min = 0, max = 1, step = 0.01, width = "140px")
           ),
+          uiOutput(ns("dmg_source_note")),
           div(
             class = "dt-container",
             style = "width: 100%; height: calc(100vh - 350px); overflow: auto;",
@@ -265,6 +256,7 @@ differential_met_ui <- function(ns){
               )
             )
           ),
+          uiOutput(ns("enr_status")),
           uiOutput(ns("enr_region_note")),
           uiOutput(ns("enr_explainer")),
           uiOutput(ns("gst_summary")),
