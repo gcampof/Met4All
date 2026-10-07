@@ -1189,7 +1189,9 @@ primary_analysis_server <- function(id, load_data_return, DIRS, APP_CACHE, cfg) 
           group1          = input$global_met_group1,
           group2          = input$global_met_group2,
           cache_dir       = DIRS$cache,
+          pathways_dir    = DIRS$pathways,
           annotation_pkg  = annotation_pkg(),
+          gene_set        = cfg$gene_set,
           palette_dir     = palette_dirs(),
           palette_name    = input$global_met_color_palette
         ),

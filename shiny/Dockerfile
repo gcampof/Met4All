@@ -80,9 +80,11 @@ RUN mkdir -p /srv/shiny-server/data /srv/shiny-server/cache && \
     chown -R shiny:shiny /srv/shiny-server
 
 COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
+# Passes the container's environment on to the app's R processes.
+COPY --chmod=755 m4a-entrypoint.sh /usr/local/bin/m4a-entrypoint.sh
 COPY app/ /srv/shiny-server/
 
 WORKDIR /srv/shiny-server
 
 EXPOSE 3838
-CMD ["/usr/bin/shiny-server"]
+CMD ["/usr/local/bin/m4a-entrypoint.sh"]

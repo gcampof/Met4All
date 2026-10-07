@@ -11,14 +11,18 @@ prepare_global_methylation <- function(
     group1          = NULL,
     group2          = NULL,
     cache_dir,
+    pathways_dir,
     annotation_pkg,
+    gene_set,
     palette_dir,
     palette_name
 ) {
   beta  <- readRDS(beta_path)
+  # The real pathway inputs, even though only the annotation is used here: on a
+  # cold cache setup_cache() builds everything, and the result is shared in-process.
   annot <- setup_cache(
-    DIRS = list(cache = cache_dir, pathways = NULL),
-    cfg  = list(annotation_pkg = annotation_pkg, gene_set = NULL)
+    DIRS = list(cache = cache_dir, pathways = pathways_dir),
+    cfg  = list(annotation_pkg = annotation_pkg, gene_set = gene_set)
   )$raw_annot
 
   palettes      <- prepare_color_palettes(palette_dir)
