@@ -143,10 +143,10 @@ for most laboratory servers.
 
 To run **more analyses at the same time**, raise `M4A_MAX_JOBS` in the
 `environment:` block of your compose file (see [Tuning](#tuning)). Editing it
-there takes effect on the next `docker compose up`, with no image rebuild. Bear
-in mind that methylation analyses are memory intensive: budget the peak memory
-for your largest cohort per simultaneous analysis, and leave the machine some
-headroom.
+there takes effect on the next `docker compose up`, with no image rebuild. Each
+extra job means one more worker holding 5 to 8 GB of memory (see
+[Resource requirements](#resource-requirements)), so raise it only on a machine
+with the memory to spare.
 
 Move to `docker-compose.scale.yml` when you want something a single instance
 cannot provide:
@@ -173,15 +173,21 @@ Docker Swarm or Kubernetes can deploy it on their own platform unchanged.
 
 ### Resource requirements
 
-Memory and disk scale with **dataset size**. Measured end to end on the [Test dataset](#test-dataset)  (68 samples:
-59 EPIC and 9 450K):
+Memory and disk scale with **dataset size**. Measured end to end on the [Test dataset](#test-dataset) (68 samples:
+48 EPIC and 20 450K):
 
 | | |
 |---|---|
-| Peak memory, one analysis | ~5 GB |
 | App itself, idle | ~250 MB |
-| Each ready worker | ~1.5 GB |
+| Each worker | 5 to 8 GB |
 | Disk, complete analysis | ~3.9 GB |
+
+Analyses run in worker processes, one per `M4A_MAX_JOBS`. A worker keeps the
+Bioconductor libraries and annotation loaded between analyses so the next one
+starts quickly, which means it holds this memory even while idle. Plan for
+`M4A_MAX_JOBS` x 8 GB plus a few GB for the system. If the machine runs short
+and starts swapping, every analysis slows down sharply, so fewer workers is
+usually faster than more.
 
 As a rough guide, allow **60 MB of working space per sample**.
 
@@ -203,6 +209,15 @@ Set them in the `environment:` block of your compose file, for example:
     environment:
       - R_CONFIG_ACTIVE=default
       - M4A_MAX_JOBS=4
+```
+
+**Single user on a laptop or workstation:** use one worker and give it more
+threads. A single analysis never uses more than one worker, so a second one only
+costs memory unless you run two analyses at once.
+
+```yaml
+      - M4A_MAX_JOBS=1
+      - M4A_THREADS_PER_JOB=8
 ```
 
 ---

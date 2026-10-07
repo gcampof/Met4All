@@ -15,7 +15,7 @@ Retinoblastoma tumours and cell lines from Ryl et al. (2024), GEO accession [GSE
 
 | | From IDATs | From the beta matrix |
 |---|---|---|
-| Samples | 68 (59 EPIC, 9 450K) | 61 tumours |
+| Samples | 68 (48 EPIC, 20 450K) | 61 tumours |
 | Download | [GSE267015.zip](https://github.com/gcampof/Met4All/releases/download/v1.0/GSE267015.zip), 886 MB | [GEO supplementary file](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE267015&format=file&file=GSE267015%5Fryl%5Fet%5Fal%5Fbeta%5Fmatrix%5Ftumors%2Etxt%2Egz) |
 | Samplesheet | included in the zip | `GSE267015_targets.csv`, in this folder |
 | Analyses | all, including QC, beta distribution and CNV | MDS, PCA, UMAP, heatmap, global and differential methylation |
