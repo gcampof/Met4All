@@ -342,3 +342,7 @@ Built on [Rocker](https://rocker-project.org/) base images:
 - `rocker/shiny:4.5`
 - Bioconductor 3.22
 - R 4.5
+
+## Disclaimer
+Met4All is intended for research use only. It is not a medical device and
+must not be used for clinical diagnosis or to guide patient treatment.
