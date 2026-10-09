@@ -1,10 +1,16 @@
-  cff-version: 1.2.0
-  message: "If you use Met4All, please cite it as below."
-  title: "Met4All"
-  authors:
-    - family-names: Campo
-      given-names: Guillem
-    - family-names: Roca
-      given-names: Carla
-  repository-code: "https://github.com/gcampof/Met4All"
-  license: MIT
+cff-version: 1.2.0
+message: "If you use Met4All, please cite it as below."
+title: "Met4All"
+type: software
+authors:
+  - family-names: Campo
+    given-names: Guillem
+  - family-names: Roca
+    given-names: Carla
+repository-code: "https://github.com/gcampof/Met4All"
+license: MIT
+doi: 10.5281/zenodo.23265674
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23265674
+    description: "Zenodo archive of Met4All"
