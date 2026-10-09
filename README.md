@@ -343,6 +343,17 @@ Built on [Rocker](https://rocker-project.org/) base images:
 - Bioconductor 3.22
 - R 4.5
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23265674.svg)](https://doi.org/10.5281/zenodo.23265674)
+
+## Citation
+
+If you use Met4All in your research, please cite it:
+
+> Campo G, Roca C. Met4All. Zenodo. https://doi.org/10.5281/zenodo.23265674
+
+Citation metadata is available in [`CITATION.cff`](CITATION.cff), or via the "Cite this repository" button on GitHub.
+
+
 ## Disclaimer
 Met4All is intended for research use only. It is not a medical device and
 must not be used for clinical diagnosis or to guide patient treatment.
