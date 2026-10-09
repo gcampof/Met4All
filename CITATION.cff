@@ -1,0 +1,10 @@
+  cff-version: 1.2.0
+  message: "If you use Met4All, please cite it as below."
+  title: "Met4All"
+  authors:
+    - family-names: Campo
+      given-names: Guillem
+    - family-names: Roca
+      given-names: Carla
+  repository-code: "https://github.com/gcampof/Met4All"
+  license: MIT
